@@ -219,6 +219,9 @@ const scanFolderTree = async (rootPath: string) => {
     const entries = await fs.readdir(current, { withFileTypes: true });
 
     for (const entry of entries) {
+      if (entry.isDirectory() && entry.name === THUMBNAIL_DIR) {
+        continue;
+      }
       const resolved = path.join(current, entry.name);
       if (entry.isDirectory()) {
         folders.push(resolved);
@@ -276,34 +279,53 @@ ipcMain.handle("comfy:select-folders", async () => {
 ipcMain.handle("comfy:index-folders", async (_event: IpcMainInvokeEvent, rootPaths: string[]) => {
   const albums: Array<{ rootPath: string; images: IndexedImagePayload[] }> = [];
   const scans = await Promise.all(rootPaths.map((rootPath) => scanFolderTree(rootPath)));
-  const allFolders = scans.flatMap((scan) => scan.folders);
-  const allFiles = scans.flatMap((scan) => scan.files);
+  const albumFolders: Array<{ rootPath: string; folderPath: string; files: string[] }> = [];
 
-  let folderIndex = 0;
-  for (const folder of allFolders) {
-    folderIndex += 1;
-    _event.sender.send("comfy:indexing-folder", {
-      current: folderIndex,
-      total: allFolders.length,
-      folder,
-    });
-  }
-
-  let imageIndex = 0;
   for (let i = 0; i < rootPaths.length; i += 1) {
     const rootPath = rootPaths[i];
     const files = scans[i].files;
-    const images: IndexedImagePayload[] = [];
+    const folderMap = new Map<string, string[]>();
+
     for (const filePath of files) {
+      const folder = path.dirname(filePath);
+      const existing = folderMap.get(folder);
+      if (existing) {
+        existing.push(filePath);
+      } else {
+        folderMap.set(folder, [filePath]);
+      }
+    }
+
+    for (const [folderPath, folderFiles] of folderMap.entries()) {
+      if (!folderFiles.length) continue;
+      albumFolders.push({ rootPath: folderPath, folderPath, files: folderFiles });
+    }
+  }
+
+  const totalImages = albumFolders.reduce((sum, album) => sum + album.files.length, 0);
+  let folderIndex = 0;
+  let imageIndex = 0;
+
+  for (const albumFolder of albumFolders) {
+    folderIndex += 1;
+    _event.sender.send("comfy:indexing-folder", {
+      current: folderIndex,
+      total: albumFolders.length,
+      folder: albumFolder.folderPath,
+    });
+
+    const images: IndexedImagePayload[] = [];
+    for (const filePath of albumFolder.files) {
       imageIndex += 1;
       _event.sender.send("comfy:indexing-image", {
         current: imageIndex,
-        total: allFiles.length,
+        total: totalImages,
         fileName: path.basename(filePath),
       });
-      images.push(await buildImagePayload(filePath, rootPath));
+      images.push(await buildImagePayload(filePath, albumFolder.rootPath));
     }
-    albums.push({ rootPath, images });
+
+    albums.push({ rootPath: albumFolder.rootPath, images });
   }
 
   _event.sender.send("comfy:indexing-complete");
