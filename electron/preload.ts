@@ -14,6 +14,12 @@ contextBridge.exposeInMainWorld("comfy", {
     ipcRenderer.invoke("comfy:delete-files-from-disk", payload),
   revealInFolder: (filePath: string) => ipcRenderer.invoke("comfy:reveal-in-folder", filePath),
   openInEditor: (filePath: string) => ipcRenderer.invoke("comfy:open-in-editor", filePath),
+  updateMenuState: (state: {
+    hasActiveImage: boolean;
+    hasActiveAlbum: boolean;
+    hasSelectedImages: boolean;
+    hasSelectedAlbums: boolean;
+  }) => ipcRenderer.send("comfy:update-menu-state", state),
   onMenuAction: (callback: (action: string) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, action: string) => callback(action);
     ipcRenderer.on("comfy:menu-action", listener);

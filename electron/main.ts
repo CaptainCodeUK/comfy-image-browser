@@ -136,6 +136,14 @@ const sendMenuAction = (action: string) => {
   }
 };
 
+const updateMenuItemEnabled = (id: string, enabled: boolean) => {
+  const menu = Menu.getApplicationMenu();
+  const item = menu?.getMenuItemById(id);
+  if (item) {
+    item.enabled = enabled;
+  }
+};
+
 const buildAppMenu = () => {
   const template: Electron.MenuItemConstructorOptions[] = [];
 
@@ -166,33 +174,47 @@ const buildAppMenu = () => {
       },
       { type: "separator" },
       {
+        id: "menu-reveal-active-image",
         label: "Reveal Active Image in File Manager",
+        enabled: false,
         click: () => sendMenuAction("reveal-active-image"),
       },
       {
+        id: "menu-edit-active-image",
         label: "Edit Active Image in Default App",
+        enabled: false,
         click: () => sendMenuAction("edit-active-image"),
       },
       {
+        id: "menu-reveal-active-album",
         label: "Reveal Active Album in File Manager",
+        enabled: false,
         click: () => sendMenuAction("reveal-active-album"),
       },
       { type: "separator" },
       {
+        id: "menu-remove-selected-images",
         label: "Remove Selected Images from Index",
+        enabled: false,
         click: () => sendMenuAction("remove-selected-images"),
       },
       {
+        id: "menu-remove-selected-albums",
         label: "Remove Selected Albums from Index",
+        enabled: false,
         click: () => sendMenuAction("remove-selected-albums"),
       },
       { type: "separator" },
       {
+        id: "menu-delete-selected-images-disk",
         label: "Delete Selected Images from Disk…",
+        enabled: false,
         click: () => sendMenuAction("delete-selected-images-disk"),
       },
       {
+        id: "menu-delete-selected-albums-disk",
         label: "Delete Selected Albums from Disk…",
+        enabled: false,
         click: () => sendMenuAction("delete-selected-albums-disk"),
       },
       { type: "separator" },
@@ -522,6 +544,19 @@ ipcMain.handle("comfy:reveal-in-folder", async (_event: IpcMainInvokeEvent, file
 ipcMain.handle("comfy:open-in-editor", async (_event: IpcMainInvokeEvent, filePath: string) => {
   await shell.openPath(filePath);
 });
+
+ipcMain.on(
+  "comfy:update-menu-state",
+  (_event, state: { hasActiveImage: boolean; hasActiveAlbum: boolean; hasSelectedImages: boolean; hasSelectedAlbums: boolean }) => {
+    updateMenuItemEnabled("menu-reveal-active-image", state.hasActiveImage);
+    updateMenuItemEnabled("menu-edit-active-image", state.hasActiveImage);
+    updateMenuItemEnabled("menu-reveal-active-album", state.hasActiveAlbum);
+    updateMenuItemEnabled("menu-remove-selected-images", state.hasSelectedImages);
+    updateMenuItemEnabled("menu-delete-selected-images-disk", state.hasSelectedImages);
+    updateMenuItemEnabled("menu-remove-selected-albums", state.hasSelectedAlbums);
+    updateMenuItemEnabled("menu-delete-selected-albums-disk", state.hasSelectedAlbums);
+  }
+);
 
 ipcMain.handle(
   "comfy:delete-files-from-disk",

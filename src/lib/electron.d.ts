@@ -31,6 +31,12 @@ declare global {
       }) => Promise<{ deletedPaths: string[]; canceled: boolean }>;
       revealInFolder: (filePath: string) => Promise<void>;
       openInEditor: (filePath: string) => Promise<void>;
+      updateMenuState: (state: {
+        hasActiveImage: boolean;
+        hasActiveAlbum: boolean;
+        hasSelectedImages: boolean;
+        hasSelectedAlbums: boolean;
+      }) => void;
       onMenuAction: (
         callback: (action: "add-folder" | "remove-selected-images" | "remove-selected-albums" | "delete-selected-images-disk" | "delete-selected-albums-disk" | "reveal-active-image" | "reveal-active-album" | "edit-active-image") => void
       ) => () => void;
