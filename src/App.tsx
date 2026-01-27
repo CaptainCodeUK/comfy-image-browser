@@ -183,6 +183,8 @@ export default function App() {
   const gridRef = useRef<HTMLDivElement | null>(null);
   const [thumbnailMap, setThumbnailMap] = useState<Record<string, string>>({});
   const [loadedThumbs, setLoadedThumbs] = useState<Set<string>>(new Set());
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+  const [selectionAnchor, setSelectionAnchor] = useState<number | null>(null);
   const thumbnailMapRef = useRef<Record<string, string>>({});
   const thumbnailPendingRef = useRef<Set<string>>(new Set());
   const thumbnailRetryRef = useRef<number | null>(null);
@@ -323,6 +325,54 @@ export default function App() {
     });
     return sorted;
   }, [images, albumIdForNav, imageSort]);
+
+  const gridColumnCount = useMemo(() => {
+    if (!gridMetrics.width) return 1;
+    return Math.max(1, Math.floor((gridMetrics.width + GRID_GAP) / (iconSize + GRID_GAP)));
+  }, [gridMetrics.width, iconSize]);
+
+  const rowHeight = iconSize + CARD_META_HEIGHT + GRID_GAP;
+  const totalRows = Math.ceil(filteredImages.length / gridColumnCount);
+  const startRow = Math.max(0, Math.floor(gridMetrics.scrollTop / rowHeight) - 1);
+  const endRow = Math.min(
+    totalRows - 1,
+    Math.ceil((gridMetrics.scrollTop + gridMetrics.height) / rowHeight) + 1
+  );
+  const startIndex = startRow * gridColumnCount;
+  const endIndex = Math.min(filteredImages.length, (endRow + 1) * gridColumnCount);
+  const visibleImages = filteredImages.slice(startIndex, endIndex);
+
+  const getRangeIds = useCallback(
+    (start: number, end: number) => {
+      const [from, to] = start < end ? [start, end] : [end, start];
+      const ids = filteredImages.slice(from, to + 1).map((image) => image.id);
+      return new Set(ids);
+    },
+    [filteredImages]
+  );
+
+  const scrollToIndex = useCallback(
+    (index: number) => {
+      const grid = gridRef.current;
+      if (!grid) return;
+      const row = Math.floor(index / gridColumnCount);
+      const rowTop = row * rowHeight;
+      const rowBottom = rowTop + rowHeight;
+      const viewTop = grid.scrollTop;
+      const viewBottom = viewTop + grid.clientHeight;
+      if (rowTop < viewTop) {
+        grid.scrollTop = rowTop;
+      } else if (rowBottom > viewBottom) {
+        grid.scrollTop = rowBottom - grid.clientHeight;
+      }
+    },
+    [gridColumnCount, rowHeight]
+  );
+
+  useEffect(() => {
+    if (focusedIndex === null) return;
+    scrollToIndex(focusedIndex);
+  }, [focusedIndex, scrollToIndex]);
 
   const sortedAlbums = useMemo(() => {
     const sorted = [...albums];
@@ -485,22 +535,6 @@ export default function App() {
     return () => cleanup?.();
   }, [hydrateFileUrls]);
 
-  const gridColumnCount = useMemo(() => {
-    if (!gridMetrics.width) return 1;
-    return Math.max(1, Math.floor((gridMetrics.width + GRID_GAP) / (iconSize + GRID_GAP)));
-  }, [gridMetrics.width, iconSize]);
-
-  const rowHeight = iconSize + CARD_META_HEIGHT + GRID_GAP;
-  const totalRows = Math.ceil(filteredImages.length / gridColumnCount);
-  const startRow = Math.max(0, Math.floor(gridMetrics.scrollTop / rowHeight) - 1);
-  const endRow = Math.min(
-    totalRows - 1,
-    Math.ceil((gridMetrics.scrollTop + gridMetrics.height) / rowHeight) + 1
-  );
-  const startIndex = startRow * gridColumnCount;
-  const endIndex = Math.min(filteredImages.length, (endRow + 1) * gridColumnCount);
-  const visibleImages = filteredImages.slice(startIndex, endIndex);
-
   useEffect(() => {
     if (!bridgeAvailable) return;
     let cancelled = false;
@@ -662,6 +696,11 @@ export default function App() {
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
         return;
       }
+      if (event.key === "Enter" && activeTab.type === "library" && selectedIds.size > 0) {
+        event.preventDefault();
+        void handleOpenImages(selectedImages);
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
         event.preventDefault();
         handleDuplicateTab();
@@ -684,6 +723,59 @@ export default function App() {
         setActiveTab(tabs[nextIndex]);
         return;
       }
+      if (activeTab.type === "library") {
+        if (filteredImages.length === 0) return;
+        const isArrow =
+          event.key === "ArrowLeft" ||
+          event.key === "ArrowRight" ||
+          event.key === "ArrowUp" ||
+          event.key === "ArrowDown";
+        if (!isArrow) return;
+        event.preventDefault();
+
+        const columns = Math.max(1, gridColumnCount);
+        const currentIndex = focusedIndex ?? 0;
+        let nextIndex = currentIndex;
+
+        if (event.key === "ArrowLeft") nextIndex = Math.max(0, currentIndex - 1);
+        if (event.key === "ArrowRight") nextIndex = Math.min(filteredImages.length - 1, currentIndex + 1);
+        if (event.key === "ArrowUp") nextIndex = Math.max(0, currentIndex - columns);
+        if (event.key === "ArrowDown") nextIndex = Math.min(filteredImages.length - 1, currentIndex + columns);
+
+        const nextId = filteredImages[nextIndex].id;
+        setFocusedIndex(nextIndex);
+
+        if (event.shiftKey) {
+          const anchor = selectionAnchor ?? currentIndex;
+          const rangeIds = getRangeIds(anchor, nextIndex);
+          setSelectedIds((prev) => {
+            if (event.ctrlKey || event.metaKey) {
+              return new Set([...prev, ...rangeIds]);
+            }
+            return rangeIds;
+          });
+          setSelectionAnchor(anchor);
+          return;
+        }
+
+        if (event.ctrlKey || event.metaKey) {
+          setSelectedIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(nextId)) {
+              next.delete(nextId);
+            } else {
+              next.add(nextId);
+            }
+            return next;
+          });
+          setSelectionAnchor(nextIndex);
+          return;
+        }
+
+        setSelectedIds(new Set([nextId]));
+        setSelectionAnchor(nextIndex);
+        return;
+      }
       if (activeTab.type !== "image") return;
 
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
@@ -700,7 +792,17 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [activeTab, albumSortedImages, handleNavigateImage]);
+  }, [
+    activeTab,
+    albumSortedImages,
+    filteredImages,
+    focusedIndex,
+    gridColumnCount,
+    handleNavigateImage,
+    selectionAnchor,
+    getRangeIds,
+    tabs,
+  ]);
 
   const handleCloseTab = (tabId: string) => {
     if (tabId === "library") return;
@@ -1169,6 +1271,13 @@ export default function App() {
               aria-label="Search images"
               className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
             />
+            <button
+              onClick={() => handleOpenImages(selectedImages)}
+              disabled={selectedImages.length === 0}
+              className="rounded-md border border-slate-700 px-3 py-2 text-xs text-slate-300 disabled:opacity-40"
+            >
+              Open selected
+            </button>
             <div className="flex items-center gap-2 text-xs text-slate-400">
               <span>Icon size</span>
               <input
@@ -1290,13 +1399,30 @@ export default function App() {
                       <button
                         key={image.id}
                         type="button"
-                        onClick={(event) => toggleSelection(image.id, event.metaKey || event.ctrlKey)}
+                        onClick={(event) => {
+                          const isMeta = event.metaKey || event.ctrlKey;
+                          if (event.shiftKey && filteredImages.length > 0) {
+                            const anchor = selectionAnchor ?? absoluteIndex;
+                            const rangeIds = getRangeIds(anchor, absoluteIndex);
+                            setSelectedIds((prev) => {
+                              if (isMeta) {
+                                return new Set([...prev, ...rangeIds]);
+                              }
+                              return rangeIds;
+                            });
+                            setSelectionAnchor(anchor);
+                          } else {
+                            toggleSelection(image.id, isMeta);
+                            setSelectionAnchor(absoluteIndex);
+                          }
+                          setFocusedIndex(absoluteIndex);
+                        }}
                         onDoubleClick={() => {
                           void handleOpenImages([image]);
                         }}
                         className={`absolute rounded-xl border p-2 text-left transition ${
                           isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800 hover:border-slate-600"
-                        }`}
+                        } ${absoluteIndex === focusedIndex ? "ring-2 ring-indigo-400" : ""}`}
                         /* eslint-disable-next-line react/forbid-dom-props */
                         style={{ top, left, width: iconSize, height: rowHeight - GRID_GAP }}
                       >
