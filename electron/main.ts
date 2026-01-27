@@ -3,6 +3,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  Menu,
   nativeImage,
   protocol,
   session,
@@ -127,6 +128,79 @@ const createWindow = async () => {
   }
 };
 
+const sendMenuAction = (action: string) => {
+  const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  if (target) {
+    target.webContents.send("comfy:menu-action", action);
+  }
+};
+
+const buildAppMenu = () => {
+  const template: Electron.MenuItemConstructorOptions[] = [];
+
+  if (process.platform === "darwin") {
+    template.push({
+      label: app.name,
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    });
+  }
+
+  template.push({
+    label: "File",
+    submenu: [
+      {
+        label: "Add Folder…",
+        accelerator: "CmdOrCtrl+O",
+        click: () => sendMenuAction("add-folder"),
+      },
+      { type: "separator" },
+      {
+        label: "Remove Selected Images",
+        click: () => sendMenuAction("remove-selected-images"),
+      },
+      {
+        label: "Remove Selected Albums",
+        click: () => sendMenuAction("remove-selected-albums"),
+      },
+      { type: "separator" },
+      process.platform === "darwin" ? { role: "close" } : { role: "quit" },
+    ],
+  });
+
+  template.push({
+    label: "View",
+    submenu: [
+      { role: "reload" },
+      { role: "forceReload" },
+      { role: "toggleDevTools" },
+      { type: "separator" },
+      { role: "resetZoom" },
+      { role: "zoomIn" },
+      { role: "zoomOut" },
+      { type: "separator" },
+      { role: "togglefullscreen" },
+    ],
+  });
+
+  template.push({
+    label: "Window",
+    submenu: [{ role: "minimize" }, { role: "close" }],
+  });
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+};
+
 const applyContentSecurityPolicy = () => {
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   const isDev = Boolean(devServerUrl);
@@ -169,6 +243,7 @@ app.whenReady().then(async () => {
   });
   applyContentSecurityPolicy();
   await createWindow();
+  buildAppMenu();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -407,3 +482,64 @@ ipcMain.handle("comfy:get-thumbnail", async (_event: IpcMainInvokeEvent, filePat
   enqueueThumbnail(filePath);
   return null;
 });
+
+ipcMain.handle(
+  "comfy:show-context-menu",
+  async (
+    event: IpcMainInvokeEvent,
+    payload:
+      | { type: "image"; imageId: string; label: string; selectedCount: number; isSelected: boolean }
+      | { type: "album"; albumId: string; label: string; selectedCount: number; isSelected: boolean }
+  ) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) return null;
+
+    return new Promise<string | null>((resolve) => {
+      let resolved = false;
+      const finish = (value: string | null) => {
+        if (resolved) return;
+        resolved = true;
+        resolve(value);
+      };
+
+      const items: Electron.MenuItemConstructorOptions[] = [];
+
+      if (payload.type === "image") {
+        items.push({
+          label: `Remove ${payload.label} from index`,
+          click: () => finish("remove-image"),
+        });
+        if (payload.selectedCount > 1) {
+          items.push({
+            label: `Remove selected images (${payload.selectedCount})`,
+            click: () => finish("remove-selected-images"),
+          });
+        }
+      }
+
+      if (payload.type === "album") {
+        items.push({
+          label: `Remove ${payload.label} from index`,
+          click: () => finish("remove-album"),
+        });
+        if (payload.selectedCount > 1) {
+          items.push({
+            label: `Remove selected albums (${payload.selectedCount})`,
+            click: () => finish("remove-selected-albums"),
+          });
+        }
+      }
+
+      if (items.length === 0) {
+        finish(null);
+        return;
+      }
+
+      const menu = Menu.buildFromTemplate(items);
+      menu.popup({
+        window,
+        callback: () => finish(null),
+      });
+    });
+  }
+);

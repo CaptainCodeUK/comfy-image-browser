@@ -5,6 +5,16 @@ contextBridge.exposeInMainWorld("comfy", {
   indexFolders: (paths: string[]) => ipcRenderer.invoke("comfy:index-folders", paths),
   toFileUrl: (filePath: string) => ipcRenderer.invoke("comfy:to-file-url", filePath),
   getThumbnail: (filePath: string) => ipcRenderer.invoke("comfy:get-thumbnail", filePath),
+  showContextMenu: (
+    payload:
+      | { type: "image"; imageId: string; label: string; selectedCount: number; isSelected: boolean }
+      | { type: "album"; albumId: string; label: string; selectedCount: number; isSelected: boolean }
+  ) => ipcRenderer.invoke("comfy:show-context-menu", payload),
+  onMenuAction: (callback: (action: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, action: string) => callback(action);
+    ipcRenderer.on("comfy:menu-action", listener);
+    return () => ipcRenderer.removeListener("comfy:menu-action", listener);
+  },
   onIndexingFolder: (callback: (payload: { current: number; total: number; folder: string }) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: { current: number; total: number; folder: string }) =>
       callback(payload);

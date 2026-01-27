@@ -868,14 +868,23 @@ export default function App() {
     });
   };
 
+  const handleRemoveImages = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    await removeImagesById(ids);
+    setImages((prev) => prev.filter((image) => !idSet.has(image.id)));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+    setTabs((prev) => prev.filter((tab) => tab.type === "library" || !idSet.has(tab.id)));
+    setActiveTab((current) => (current.type === "image" && idSet.has(current.id) ? LibraryTab : current));
+  };
+
   const handleRemoveSelected = async () => {
     if (selectedIds.size === 0) return;
-    const ids = Array.from(selectedIds);
-    await removeImagesById(ids);
-    setImages((prev) => prev.filter((image) => !selectedIds.has(image.id)));
-    setSelectedIds(new Set());
-    setTabs((prev) => prev.filter((tab) => tab.type === "library" || !selectedIds.has(tab.id)));
-    setActiveTab((current) => (current.type === "image" && selectedIds.has(current.id) ? LibraryTab : current));
+    await handleRemoveImages(Array.from(selectedIds));
   };
 
   const handleRemoveAlbum = async (albumId: string) => {
@@ -943,6 +952,42 @@ export default function App() {
     setSelectedAlbumIds(new Set());
   };
 
+  const handleImageContextMenu = async (event: React.MouseEvent, image: IndexedImage) => {
+    event.preventDefault();
+    if (!bridgeAvailable || !window.comfy?.showContextMenu) return;
+    const action = await window.comfy.showContextMenu({
+      type: "image",
+      imageId: image.id,
+      label: image.fileName,
+      selectedCount: selectedIds.size,
+      isSelected: selectedIds.has(image.id),
+    });
+    if (action === "remove-image") {
+      await handleRemoveImages([image.id]);
+    }
+    if (action === "remove-selected-images") {
+      await handleRemoveImages(Array.from(selectedIds));
+    }
+  };
+
+  const handleAlbumContextMenu = async (event: React.MouseEvent, album: Album) => {
+    event.preventDefault();
+    if (!bridgeAvailable || !window.comfy?.showContextMenu) return;
+    const action = await window.comfy.showContextMenu({
+      type: "album",
+      albumId: album.id,
+      label: album.name,
+      selectedCount: selectedAlbumIds.size,
+      isSelected: selectedAlbumIds.has(album.id),
+    });
+    if (action === "remove-album") {
+      await handleRemoveAlbum(album.id);
+    }
+    if (action === "remove-selected-albums") {
+      await handleRemoveSelectedAlbums();
+    }
+  };
+
   const handleAddFolder = async () => {
     if (!bridgeAvailable) {
       setBridgeError("Electron bridge unavailable. Launch the app via Electron (not the browser) to add folders.");
@@ -978,6 +1023,23 @@ export default function App() {
       setIsIndexing(false);
     }
   };
+
+  useEffect(() => {
+    if (!bridgeAvailable || !window.comfy?.onMenuAction) return;
+    return window.comfy.onMenuAction((action) => {
+      if (action === "add-folder") {
+        void handleAddFolder();
+        return;
+      }
+      if (action === "remove-selected-images") {
+        void handleRemoveSelected();
+        return;
+      }
+      if (action === "remove-selected-albums") {
+        void handleRemoveSelectedAlbums();
+      }
+    });
+  }, [bridgeAvailable, handleAddFolder, handleRemoveSelected, handleRemoveSelectedAlbums]);
 
   const activeTabContent = useMemo(() => {
     if (activeTab.type === "library") return null;
@@ -1225,6 +1287,7 @@ export default function App() {
             {sortedAlbums.map((album) => (
               <div
                 key={album.id}
+                onContextMenu={(event) => void handleAlbumContextMenu(event, album)}
                 className={`rounded-lg px-3 py-2 text-left text-sm ${
                   albumHighlightId === album.id ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900"
                 }`}
@@ -1449,6 +1512,7 @@ export default function App() {
                       <button
                         key={image.id}
                         type="button"
+                        onContextMenu={(event) => void handleImageContextMenu(event, image)}
                         onClick={(event) => {
                           const isMeta = event.metaKey || event.ctrlKey;
                           if (event.shiftKey && filteredImages.length > 0) {
