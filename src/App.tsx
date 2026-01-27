@@ -171,6 +171,7 @@ export default function App() {
   const [viewerSize, setViewerSize] = useState({ width: 0, height: 0 });
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const viewerRef = useRef<HTMLDivElement | null>(null);
+  const viewerFocusRef = useRef<HTMLDivElement | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [lastCopied, setLastCopied] = useState<string | null>(null);
   const [albumSort, setAlbumSort] = useState<AlbumSort>("name-asc");
@@ -215,20 +216,6 @@ export default function App() {
     }, 200);
     return () => window.clearTimeout(timeout);
   }, [iconSize]);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w") {
-        event.preventDefault();
-        if (activeTab.id !== "library") {
-          handleCloseTab(activeTab.id);
-        }
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeTab]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -305,6 +292,38 @@ export default function App() {
     return sorted;
   }, [images, search, albumById, activeAlbum, imageSort]);
 
+  const albumIdForNav = activeTab.type === "image" ? activeTab.image.albumId : activeAlbum;
+  const albumHighlightId = albumIdForNav;
+
+  const albumSortedImages = useMemo(() => {
+    const visible = images.filter((image) => {
+      if (albumIdForNav !== "all" && image.albumId !== albumIdForNav) {
+        return false;
+      }
+      return true;
+    });
+    const sorted = [...visible];
+    sorted.sort((a, b) => {
+      switch (imageSort) {
+        case "name-asc":
+          return a.fileName.localeCompare(b.fileName);
+        case "name-desc":
+          return b.fileName.localeCompare(a.fileName);
+        case "date-asc":
+          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        case "date-desc":
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        case "size-asc":
+          return a.sizeBytes - b.sizeBytes;
+        case "size-desc":
+          return b.sizeBytes - a.sizeBytes;
+        default:
+          return 0;
+      }
+    });
+    return sorted;
+  }, [images, albumIdForNav, imageSort]);
+
   const sortedAlbums = useMemo(() => {
     const sorted = [...albums];
     sorted.sort((a, b) => {
@@ -330,22 +349,23 @@ export default function App() {
       let cancelled = false;
       let cursor = 0;
 
-      const requestIdle = (callback: () => void) => {
+      type IdleHandle = ReturnType<typeof globalThis.setTimeout> | number;
+      const requestIdle = (callback: () => void): IdleHandle => {
         if ("requestIdleCallback" in window) {
           return (window as Window & { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(callback);
         }
         return globalThis.setTimeout(callback, 0);
       };
 
-      const cancelIdle = (id: number) => {
+      const cancelIdle = (id: IdleHandle) => {
         if ("cancelIdleCallback" in window) {
-          (window as Window & { cancelIdleCallback: (cb: number) => void }).cancelIdleCallback(id);
+          (window as Window & { cancelIdleCallback: (cb: number) => void }).cancelIdleCallback(id as number);
         } else {
           globalThis.clearTimeout(id);
         }
       };
 
-      let idleId: number | null = null;
+      let idleId: IdleHandle | null = null;
 
       const runBatch = async () => {
         if (cancelled) return;
@@ -438,7 +458,7 @@ export default function App() {
         getAppPref<AlbumSort>("albumSort"),
         getAppPref<ImageSort>("imageSort"),
       ]);
-      const baseImages = imageRows.map((image) => ({ ...image, fileUrl: image.filePath }));
+  const baseImages = imageRows.map((image: IndexedImage) => ({ ...image, fileUrl: image.filePath }));
       console.log("[comfy-browser] Loaded", {
         albums: albumRows.length,
         images: baseImages.length,
@@ -484,18 +504,19 @@ export default function App() {
   useEffect(() => {
     if (!bridgeAvailable) return;
     let cancelled = false;
-    let idleId: number | null = null;
+    type IdleHandle = ReturnType<typeof globalThis.setTimeout> | number;
+    let idleId: IdleHandle | null = null;
 
-    const requestIdle = (callback: () => void) => {
+    const requestIdle = (callback: () => void): IdleHandle => {
       if ("requestIdleCallback" in window) {
         return (window as Window & { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(callback);
       }
       return globalThis.setTimeout(callback, 0);
     };
 
-    const cancelIdle = (id: number) => {
+    const cancelIdle = (id: IdleHandle) => {
       if ("cancelIdleCallback" in window) {
-        (window as Window & { cancelIdleCallback: (cb: number) => void }).cancelIdleCallback(id);
+        (window as Window & { cancelIdleCallback: (cb: number) => void }).cancelIdleCallback(id as number);
       } else {
         globalThis.clearTimeout(id);
       }
@@ -604,12 +625,98 @@ export default function App() {
     });
   };
 
+  const handleNavigateImage = async (target: IndexedImage) => {
+    const [resolved] = await resolveFileUrlsForTabs([target]);
+    if (!resolved) return;
+
+    if (activeTab.type !== "image") {
+      await handleOpenImages([resolved]);
+      return;
+    }
+
+    const currentTabId = activeTab.id;
+
+    setTabs((prev) =>
+      prev.map((tab) =>
+        tab.id === currentTabId
+          ? {
+              id: currentTabId,
+              title: resolved.fileName,
+              type: "image" as const,
+              image: resolved,
+            }
+          : tab
+      )
+    );
+    setActiveTab({
+      id: currentTabId,
+      title: resolved.fileName,
+      type: "image" as const,
+      image: resolved,
+    });
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        handleDuplicateTab();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w") {
+        event.preventDefault();
+        if (activeTab.id !== "library") {
+          handleCloseTab(activeTab.id);
+        }
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "tab") {
+        event.preventDefault();
+        const direction = event.shiftKey ? -1 : 1;
+        if (tabs.length === 0) return;
+        const currentIndex = tabs.findIndex((tab) => tab.id === activeTab.id);
+        if (currentIndex === -1) return;
+        const nextIndex = (currentIndex + direction + tabs.length) % tabs.length;
+        setActiveTab(tabs[nextIndex]);
+        return;
+      }
+      if (activeTab.type !== "image") return;
+
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        const currentImageId = activeTab.image.id;
+        const currentIndex = albumSortedImages.findIndex((image) => image.id === currentImageId);
+        if (currentIndex === -1) return;
+        const delta = event.key === "ArrowLeft" ? -1 : 1;
+        const total = albumSortedImages.length;
+        const nextIndex = (currentIndex + delta + total) % total;
+        event.preventDefault();
+        void handleNavigateImage(albumSortedImages[nextIndex]);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
+  }, [activeTab, albumSortedImages, handleNavigateImage]);
+
   const handleCloseTab = (tabId: string) => {
     if (tabId === "library") return;
-    setTabs((prev) => prev.filter((tab) => tab.id !== tabId));
-    setActiveTab((current) => {
-      if (current.id !== tabId) return current;
-      return LibraryTab;
+    setTabs((prev) => {
+      const index = prev.findIndex((tab) => tab.id === tabId);
+      const nextTabs = prev.filter((tab) => tab.id !== tabId);
+
+      setActiveTab((current) => {
+        if (current.id !== tabId) return current;
+        if (nextTabs.length === 0) return LibraryTab;
+        const leftIndex = Math.max(0, index - 1);
+        const fallbackIndex = Math.min(leftIndex, nextTabs.length - 1);
+        return nextTabs[fallbackIndex];
+      });
+
+      return nextTabs;
     });
   };
 
@@ -624,6 +731,37 @@ export default function App() {
       return keep.length ? keep : [LibraryTab];
     });
     setActiveTab((current) => (current.id === tabId ? current : LibraryTab));
+  };
+
+  const handleDuplicateTab = () => {
+    if (activeTab.type !== "image") return;
+    const baseId = activeTab.image.id;
+    const uniqueSuffix = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}`;
+    const duplicateId = `${baseId}-dup-${uniqueSuffix}`;
+    const duplicateTab: Tab = {
+      id: duplicateId,
+      title: activeTab.image.fileName,
+      type: "image",
+      image: activeTab.image,
+    };
+
+    setTabs((prev) => {
+      const index = prev.findIndex((tab) => tab.id === activeTab.id);
+      if (index === -1) {
+        return [...prev, duplicateTab];
+      }
+      const next = [...prev];
+      next.splice(index + 1, 0, duplicateTab);
+      return next;
+    });
+    setActiveTab(duplicateTab);
+    requestAnimationFrame(() => {
+      const activeElement = document.activeElement as HTMLElement | null;
+      if (activeElement && typeof activeElement.blur === "function") {
+        activeElement.blur();
+      }
+      viewerFocusRef.current?.focus();
+    });
   };
 
   const handleRemoveSelected = async () => {
@@ -966,7 +1104,7 @@ export default function App() {
             <button
               onClick={() => setActiveAlbum("all")}
               className={`w-full rounded-lg px-3 py-2 text-left text-sm ${
-                activeAlbum === "all" ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900"
+                albumHighlightId === "all" ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900"
               }`}
             >
               All Images
@@ -977,7 +1115,7 @@ export default function App() {
               <div
                 key={album.id}
                 className={`rounded-lg px-3 py-2 text-left text-sm ${
-                  activeAlbum === album.id ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900"
+                  albumHighlightId === album.id ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900"
                 }`}
               >
                 <label className="flex min-w-0 cursor-pointer items-start gap-2">
@@ -1061,53 +1199,64 @@ export default function App() {
           </div>
 
           <div className="border-b border-slate-800 bg-slate-950/20 px-4 py-2">
-            <div className="flex items-center gap-2 overflow-x-auto">
-              {tabs.map((tab) => {
-                const isActive = activeTab.id === tab.id;
-                return (
-                  <div
-                    key={tab.id}
-                    className={`flex items-center gap-2 rounded-full px-4 py-1 text-sm ${
-                      isActive ? "bg-indigo-500 text-white" : "bg-slate-800 text-slate-200"
-                    }`}
-                  >
-                    <button
-                      onClick={() => setActiveTab(tab)}
-                      onMouseDown={(event) => {
-                        if (event.button === 1) {
-                          event.preventDefault();
-                          handleCloseTab(tab.id);
-                        }
-                      }}
-                      className="truncate"
-                      aria-current={isActive ? "page" : undefined}
-                    >
-                      {tab.title}
-                    </button>
-                    {tab.type === "image" ? (
-                      <button
-                        onClick={() => handleCloseTab(tab.id)}
-                        className="rounded-full px-1 text-xs text-slate-200/80 hover:bg-white/10"
-                        aria-label={`Close ${tab.title}`}
+            <div className="flex items-center gap-3">
+              <div className="flex-1 overflow-x-scroll tab-scroll pb-1">
+                <div className="flex items-center gap-2 pl-0">
+                  {tabs.map((tab) => {
+                    const isActive = activeTab.id === tab.id;
+                    return (
+                      <div
+                        key={tab.id}
+                        className={`flex flex-none items-center gap-2 rounded-lg px-4 py-1 text-sm ${
+                          isActive ? "bg-indigo-500 text-white" : "bg-slate-800 text-slate-200"
+                        }`}
                       >
-                        ×
-                      </button>
-                    ) : null}
-                  </div>
-                );
-              })}
-              <div className="ml-auto flex items-center gap-2">
+                        <button
+                          onClick={() => setActiveTab(tab)}
+                          onMouseDown={(event) => {
+                            if (event.button === 1) {
+                              event.preventDefault();
+                              handleCloseTab(tab.id);
+                            }
+                          }}
+                          className="truncate"
+                          aria-current={isActive ? "page" : undefined}
+                        >
+                          {tab.title}
+                        </button>
+                        {tab.type === "image" ? (
+                          <button
+                            onClick={() => handleCloseTab(tab.id)}
+                            className="rounded-md px-1 text-xs text-slate-200/80 hover:bg-white/10"
+                            aria-label={`Close ${tab.title}`}
+                          >
+                            ×
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="flex flex-none items-center gap-2">
+                <button
+                  onClick={handleDuplicateTab}
+                  disabled={activeTab.type !== "image"}
+                  className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-300 disabled:opacity-40"
+                >
+                  Duplicate
+                </button>
                 <button
                   onClick={handleCloseAllTabs}
                   disabled={tabs.length <= 1}
-                  className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300 disabled:opacity-40"
+                  className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-300 disabled:opacity-40"
                 >
                   Close all
                 </button>
                 <button
                   onClick={() => handleCloseOtherTabs(activeTab.id)}
                   disabled={tabs.length <= 2 || activeTab.id === "library"}
-                  className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300 disabled:opacity-40"
+                  className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-300 disabled:opacity-40"
                 >
                   Close others
                 </button>
@@ -1179,52 +1328,14 @@ export default function App() {
           ) : activeTabContent ? (
             <section className="flex flex-1 overflow-hidden">
               <div className="flex flex-1 flex-col overflow-hidden">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-950/40 px-4 py-2 text-xs text-slate-300">
-                  <div className="font-semibold">Viewer</div>
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => setZoomMode("fit")}
-                      className="rounded-full border border-slate-700 px-3 py-1"
-                    >
-                      Fit
-                    </button>
-                    <button
-                      onClick={() => setZoomMode("actual")}
-                      className="rounded-full border border-slate-700 px-3 py-1"
-                    >
-                      100%
-                    </button>
-                    <button
-                      onClick={() => setZoomMode("width")}
-                      className="rounded-full border border-slate-700 px-3 py-1"
-                    >
-                      Fit width
-                    </button>
-                    <button
-                      onClick={() => setZoomMode("height")}
-                      className="rounded-full border border-slate-700 px-3 py-1"
-                    >
-                      Fit height
-                    </button>
-                    <div className="flex items-center gap-2">
-                      <span>Zoom</span>
-                      <input
-                        type="range"
-                        min={0.5}
-                        max={3}
-                        step={0.1}
-                        value={derivedZoom}
-                        onChange={(event) => {
-                          setZoomMode("manual");
-                          setZoomLevel(Number(event.target.value));
-                        }}
-                        aria-label="Zoom image"
-                      />
-                      <span className="w-12 text-right">{Math.round(derivedZoom * 100)}%</span>
-                    </div>
-                  </div>
-                </div>
-                <div ref={viewerRef} className="flex flex-1 items-center justify-center overflow-auto p-2">
+                <div
+                  ref={(node) => {
+                    viewerRef.current = node;
+                    viewerFocusRef.current = node;
+                  }}
+                  tabIndex={0}
+                  className="relative flex flex-1 items-center justify-center overflow-auto p-2 outline-none"
+                >
                   <img
                     src={activeTabContent.fileUrl}
                     alt={activeTabContent.fileName}
@@ -1242,6 +1353,50 @@ export default function App() {
                       setImageSize({ width: target.naturalWidth, height: target.naturalHeight });
                     }}
                   />
+                  <div className="absolute bottom-4 right-4 flex flex-col items-end gap-3 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-xs text-slate-200 shadow-lg">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button
+                        onClick={() => setZoomMode("fit")}
+                        className="rounded-md border border-slate-700 px-2 py-1"
+                      >
+                        Fit
+                      </button>
+                      <button
+                        onClick={() => setZoomMode("actual")}
+                        className="rounded-md border border-slate-700 px-2 py-1"
+                      >
+                        100%
+                      </button>
+                      <button
+                        onClick={() => setZoomMode("width")}
+                        className="rounded-md border border-slate-700 px-2 py-1"
+                      >
+                        Fit width
+                      </button>
+                      <button
+                        onClick={() => setZoomMode("height")}
+                        className="rounded-md border border-slate-700 px-2 py-1"
+                      >
+                        Fit height
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span>Zoom</span>
+                      <input
+                        type="range"
+                        min={0.5}
+                        max={3}
+                        step={0.1}
+                        value={derivedZoom}
+                        onChange={(event) => {
+                          setZoomMode("manual");
+                          setZoomLevel(Number(event.target.value));
+                        }}
+                        aria-label="Zoom image"
+                      />
+                      <span className="w-12 text-right">{Math.round(derivedZoom * 100)}%</span>
+                    </div>
+                  </div>
                 </div>
               </div>
               <aside className="w-96 border-l border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-200">

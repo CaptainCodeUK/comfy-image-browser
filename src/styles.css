@@ -53,6 +53,11 @@ body {
   height: 8px;
 }
 
+/* stylelint-disable-next-line plugin/no-unsupported-browser-features */
+.tab-scroll {
+  scrollbar-gutter: stable;
+}
+
 .scrollbar-thin::-webkit-scrollbar-thumb {
   background-color: rgba(148, 163, 184, 0.4);
   border-radius: 9999px;
