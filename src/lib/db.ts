@@ -2,16 +2,25 @@ import { openDB, type IDBPDatabase } from "idb";
 import type { Album, IndexedImage, IndexedImagePayload } from "./types";
 
 const DB_NAME = "comfy-browser-db";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const dbPromise = openDB(DB_NAME, DB_VERSION, {
-  upgrade(db: IDBPDatabase) {
+  upgrade(db: IDBPDatabase, _oldVersion, _newVersion, transaction) {
     if (!db.objectStoreNames.contains("albums")) {
       db.createObjectStore("albums", { keyPath: "id" });
     }
     if (!db.objectStoreNames.contains("images")) {
       const store = db.createObjectStore("images", { keyPath: "id" });
       store.createIndex("albumId", "albumId");
+    }
+    if (!db.objectStoreNames.contains("imagePrefs")) {
+      db.createObjectStore("imagePrefs", { keyPath: "imageId" });
+    }
+    if (!db.objectStoreNames.contains("appPrefs")) {
+      db.createObjectStore("appPrefs", { keyPath: "key" });
+    }
+    if (transaction) {
+      transaction.oncomplete = () => {};
     }
   },
 });
@@ -66,9 +75,40 @@ export const getImages = async () => {
 
 export const removeImagesById = async (ids: string[]) => {
   const db = await dbPromise;
-  const tx = db.transaction("images", "readwrite");
+  const tx = db.transaction(["images", "imagePrefs"], "readwrite");
   for (const id of ids) {
-    await tx.store.delete(id);
+    await tx.objectStore("images").delete(id);
+    await tx.objectStore("imagePrefs").delete(id);
   }
   await tx.done;
+};
+
+export const getImageViewPrefs = async (imageId: string) => {
+  const db = await dbPromise;
+  return db.get("imagePrefs", imageId);
+};
+
+export const setImageViewPrefs = async (imageId: string, zoomMode: string, zoomLevel: number) => {
+  const db = await dbPromise;
+  return db.put("imagePrefs", {
+    imageId,
+    zoomMode,
+    zoomLevel,
+    updatedAt: new Date().toISOString(),
+  });
+};
+
+export const getAppPref = async <T>(key: string) => {
+  const db = await dbPromise;
+  const result = await db.get("appPrefs", key);
+  return result?.value as T | undefined;
+};
+
+export const setAppPref = async (key: string, value: unknown) => {
+  const db = await dbPromise;
+  return db.put("appPrefs", {
+    key,
+    value,
+    updatedAt: new Date().toISOString(),
+  });
 };

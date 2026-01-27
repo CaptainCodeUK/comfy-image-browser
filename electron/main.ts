@@ -14,6 +14,7 @@ import { parsePngMetadata, readPngDimensions, type ParsedPngMetadata } from "../
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 
 const COMFY_PROTOCOL = "comfy";
+const WINDOW_STATE_FILE = "window-state.json";
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -39,15 +40,42 @@ type IndexedImagePayload = {
   metadataJson: Record<string, unknown> | null;
 };
 
-const createWindow = () => {
+const readWindowState = async () => {
+  try {
+    const statePath = path.join(app.getPath("userData"), WINDOW_STATE_FILE);
+    const raw = await fs.readFile(statePath, "utf-8");
+    const parsed = JSON.parse(raw) as { width: number; height: number; x: number; y: number };
+    if (parsed.width && parsed.height) {
+      return parsed;
+    }
+  } catch {
+    // ignore missing or invalid state
+  }
+  return null;
+};
+
+const persistWindowState = async (window: BrowserWindow) => {
+  const bounds = window.getBounds();
+  const statePath = path.join(app.getPath("userData"), WINDOW_STATE_FILE);
+  await fs.writeFile(statePath, JSON.stringify(bounds, null, 2));
+};
+
+const createWindow = async () => {
+  const previousState = await readWindowState();
   const mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
+    width: previousState?.width ?? 1400,
+    height: previousState?.height ?? 900,
+    x: previousState?.x,
+    y: previousState?.y,
     backgroundColor: "#0b1220",
     webPreferences: {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.js"),
     },
+  });
+
+  mainWindow.on("close", () => {
+    void persistWindowState(mainWindow);
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {
@@ -80,7 +108,7 @@ const applyContentSecurityPolicy = () => {
   });
 };
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (process.env.VITE_DEV_SERVER_URL) {
     process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = "true";
   }
@@ -99,7 +127,7 @@ app.whenReady().then(() => {
     }
   });
   applyContentSecurityPolicy();
-  createWindow();
+  await createWindow();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

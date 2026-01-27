@@ -29,3 +29,10 @@ export type IndexedImage = {
   height?: number;
   metadataText: Record<string, string> | null;
 };
+
+export type ImageViewPrefs = {
+  imageId: string;
+  zoomMode: "fit" | "actual" | "width" | "height" | "manual";
+  zoomLevel: number;
+  updatedAt: string;
+};

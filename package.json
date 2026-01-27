@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "main": "electron-dist/electron/main.js",
   "scripts": {
-    "dev": "npm run build:electron && concurrently \"npm:dev:electron\" \"npm:dev:renderer\" \"npm:dev:app\"",
+  "dev": "npm run build:electron && concurrently --kill-others --success=first \"npm:dev:app\" \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:renderer": "vite",
     "dev:electron": "tsc -w -p electron/tsconfig.json",
     "dev:app": "wait-on http://localhost:5173 && VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
