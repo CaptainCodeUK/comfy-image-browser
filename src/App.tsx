@@ -22,6 +22,7 @@ type Tab =
 type ZoomMode = "fit" | "actual" | "width" | "height" | "manual";
 type AlbumSort = "name-asc" | "name-desc" | "added-desc" | "added-asc";
 type ImageSort = "name-asc" | "name-desc" | "date-desc" | "date-asc" | "size-desc" | "size-asc";
+type ProgressState = { current: number; total: number; label: string } | null;
 
 type MetadataValue = string | number | boolean | null | MetadataValue[] | { [key: string]: MetadataValue };
 
@@ -171,6 +172,8 @@ export default function App() {
   const [albumSort, setAlbumSort] = useState<AlbumSort>("name-asc");
   const [imageSort, setImageSort] = useState<ImageSort>("date-desc");
   const [selectedAlbumIds, setSelectedAlbumIds] = useState<Set<string>>(new Set());
+  const [folderProgress, setFolderProgress] = useState<ProgressState>(null);
+  const [imageProgress, setImageProgress] = useState<ProgressState>(null);
 
   const bridgeAvailable = typeof window !== "undefined" && !!window.comfy;
 
@@ -461,6 +464,8 @@ export default function App() {
       return;
     }
     setIsIndexing(true);
+    setFolderProgress(null);
+    setImageProgress(null);
     try {
       const folderPaths = await window.comfy.selectFolders();
       if (!folderPaths.length) {
@@ -581,6 +586,26 @@ export default function App() {
   }, [toastMessage]);
 
   useEffect(() => {
+    if (!bridgeAvailable) return;
+    const unsubscribeFolder = window.comfy.onIndexingFolder((payload) => {
+      setFolderProgress({ current: payload.current, total: payload.total, label: payload.folder });
+    });
+    const unsubscribeImage = window.comfy.onIndexingImage((payload) => {
+      setImageProgress({ current: payload.current, total: payload.total, label: payload.fileName });
+    });
+    const unsubscribeComplete = window.comfy.onIndexingComplete(() => {
+      setFolderProgress(null);
+      setImageProgress(null);
+    });
+
+    return () => {
+      unsubscribeFolder();
+      unsubscribeImage();
+      unsubscribeComplete();
+    };
+  }, [bridgeAvailable]);
+
+  useEffect(() => {
     if (!lastCopied) return;
     const timeout = window.setTimeout(() => setLastCopied(null), 1200);
     return () => window.clearTimeout(timeout);
@@ -591,6 +616,50 @@ export default function App() {
       {toastMessage ? (
         <div className="pointer-events-none fixed right-6 top-6 z-50 rounded-lg bg-slate-900/90 px-4 py-2 text-xs text-slate-100 shadow-lg">
           {toastMessage}
+        </div>
+      ) : null}
+      {isIndexing ? (
+        <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-slate-950/70">
+          <div className="rounded-2xl border border-slate-800 bg-slate-950/90 px-6 py-4 text-sm text-slate-100 shadow-xl">
+            <div className="flex items-center gap-3">
+              <div className="h-3 w-3 animate-pulse rounded-full bg-indigo-400" />
+              <span>Indexing images… this may take a moment.</span>
+            </div>
+            <div className="mt-4 space-y-3 text-xs text-slate-300">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span>Folders</span>
+                  <span>{folderProgress ? `${folderProgress.current} / ${folderProgress.total}` : "…"}</span>
+                </div>
+                <progress
+                  className="progress-bar"
+                  value={folderProgress ? folderProgress.current : 0}
+                  max={folderProgress ? folderProgress.total : 1}
+                />
+                {folderProgress ? (
+                  <div className="mt-1 truncate text-[11px] text-slate-400" title={folderProgress.label}>
+                    {folderProgress.label}
+                  </div>
+                ) : null}
+              </div>
+              <div>
+                <div className="flex items-center justify-between">
+                  <span>Images</span>
+                  <span>{imageProgress ? `${imageProgress.current} / ${imageProgress.total}` : "…"}</span>
+                </div>
+                <progress
+                  className="progress-bar"
+                  value={imageProgress ? imageProgress.current : 0}
+                  max={imageProgress ? imageProgress.total : 1}
+                />
+                {imageProgress ? (
+                  <div className="mt-1 truncate text-[11px] text-slate-400" title={imageProgress.label}>
+                    {imageProgress.label}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
       {bridgeError ? (

@@ -23,6 +23,31 @@ body {
   transform-origin: center center;
 }
 
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 9999px;
+  overflow: hidden;
+  background-color: rgba(30, 41, 59, 0.6);
+}
+
+.progress-bar::-webkit-progress-bar {
+  background-color: rgba(30, 41, 59, 0.6);
+  border-radius: 9999px;
+}
+
+.progress-bar::-webkit-progress-value {
+  background-color: rgba(99, 102, 241, 0.9);
+  border-radius: 9999px;
+}
+
+.progress-bar::-moz-progress-bar {
+  background-color: rgba(99, 102, 241, 0.9);
+  border-radius: 9999px;
+}
+
 .scrollbar-thin::-webkit-scrollbar {
   width: 8px;
   height: 8px;
