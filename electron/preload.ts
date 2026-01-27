@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld("comfy", {
   selectFolders: () => ipcRenderer.invoke("comfy:select-folders"),
   indexFolders: (paths: string[]) => ipcRenderer.invoke("comfy:index-folders", paths),
   toFileUrl: (filePath: string) => ipcRenderer.invoke("comfy:to-file-url", filePath),
+  getThumbnail: (filePath: string) => ipcRenderer.invoke("comfy:get-thumbnail", filePath),
   onIndexingFolder: (callback: (payload: { current: number; total: number; folder: string }) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: { current: number; total: number; folder: string }) =>
       callback(payload);

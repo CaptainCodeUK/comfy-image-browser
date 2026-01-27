@@ -3,6 +3,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  nativeImage,
   protocol,
   session,
   type IpcMainInvokeEvent,
@@ -16,6 +17,13 @@ const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 const COMFY_PROTOCOL = "comfy";
 const WINDOW_STATE_FILE = "window-state.json";
 const APP_NAME = "comfy-browser";
+const THUMBNAIL_DIR = ".thumbs";
+const THUMBNAIL_SIZE = 320;
+const THUMBNAIL_QUEUE_DELAY_MS = 10;
+
+const thumbnailQueue: string[] = [];
+const thumbnailInFlight = new Set<string>();
+let thumbnailQueueRunning = false;
 
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_NAME);
@@ -113,6 +121,7 @@ const createWindow = async () => {
 
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
+    mainWindow.webContents.openDevTools({ mode: "right" });
   } else {
     mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
   }
@@ -303,4 +312,76 @@ ipcMain.handle("comfy:index-folders", async (_event: IpcMainInvokeEvent, rootPat
 
 ipcMain.handle("comfy:to-file-url", async (_event: IpcMainInvokeEvent, filePath: string) => {
   return `${COMFY_PROTOCOL}://local?path=${encodeURIComponent(filePath)}`;
+});
+
+const getThumbnailPath = async (filePath: string) => {
+  const directory = path.dirname(filePath);
+  const fileName = path.basename(filePath);
+  const thumbDir = path.join(directory, THUMBNAIL_DIR);
+  const thumbPath = path.join(thumbDir, fileName);
+  await fs.mkdir(thumbDir, { recursive: true });
+  return thumbPath;
+};
+
+const getCachedThumbnail = async (filePath: string) => {
+  const thumbPath = await getThumbnailPath(filePath);
+  try {
+    await fs.access(thumbPath);
+    return thumbPath;
+  } catch {
+    return null;
+  }
+};
+
+const ensureThumbnail = async (filePath: string) => {
+  const cached = await getCachedThumbnail(filePath);
+  if (cached) return cached;
+  const thumbPath = await getThumbnailPath(filePath);
+  const image = nativeImage.createFromPath(filePath);
+  if (image.isEmpty()) {
+    throw new Error(`Failed to load image for thumbnail: ${filePath}`);
+  }
+  const resized = image.resize({ width: THUMBNAIL_SIZE });
+  await fs.writeFile(thumbPath, resized.toPNG());
+  return thumbPath;
+};
+
+const enqueueThumbnail = (filePath: string) => {
+  if (thumbnailInFlight.has(filePath) || thumbnailQueue.includes(filePath)) return;
+  thumbnailQueue.push(filePath);
+  void processThumbnailQueue();
+};
+
+const processThumbnailQueue = async () => {
+  if (thumbnailQueueRunning) return;
+  thumbnailQueueRunning = true;
+
+  while (thumbnailQueue.length > 0) {
+    const filePath = thumbnailQueue.shift();
+    if (!filePath) break;
+    if (thumbnailInFlight.has(filePath)) continue;
+
+    thumbnailInFlight.add(filePath);
+    try {
+      await ensureThumbnail(filePath);
+    } catch {
+      // ignore thumbnail generation failures
+    } finally {
+      thumbnailInFlight.delete(filePath);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, THUMBNAIL_QUEUE_DELAY_MS));
+  }
+
+  thumbnailQueueRunning = false;
+};
+
+ipcMain.handle("comfy:get-thumbnail", async (_event: IpcMainInvokeEvent, filePath: string) => {
+  const cached = await getCachedThumbnail(filePath);
+  if (cached) {
+    return `${COMFY_PROTOCOL}://local?path=${encodeURIComponent(cached)}`;
+  }
+
+  enqueueThumbnail(filePath);
+  return null;
 });

@@ -11,6 +11,6 @@
     "skipLibCheck": true,
     "types": ["node", "electron"]
   },
-  "include": ["./**/*.ts", "../src/lib/**/*.ts"],
+  "include": ["./**/*.ts", "./**/*.d.ts", "../src/lib/**/*.ts", "../src/lib/**/*.d.ts"],
   "exclude": ["../node_modules", "../dist"]
 }

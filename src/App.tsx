@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addAlbumWithImages,
   getAlbums,
@@ -10,10 +10,14 @@ import {
   setAppPref,
   setImageViewPrefs,
 } from "./lib/db";
-import { attachFileUrls } from "./lib/imageMapper";
 import type { Album, IndexedImage, IndexedImagePayload } from "./lib/types";
 
 const DEFAULT_ICON_SIZE = 180;
+const GRID_GAP = 16;
+const CARD_META_HEIGHT = 56;
+const THUMBNAIL_BATCH_SIZE = 12;
+const THUMBNAIL_RETRY_MS = 1200;
+const FILE_URL_BATCH_SIZE = 30;
 
 type Tab =
   | { id: "library"; title: "Library"; type: "library" }
@@ -174,43 +178,36 @@ export default function App() {
   const [selectedAlbumIds, setSelectedAlbumIds] = useState<Set<string>>(new Set());
   const [folderProgress, setFolderProgress] = useState<ProgressState>(null);
   const [imageProgress, setImageProgress] = useState<ProgressState>(null);
+  const [gridMetrics, setGridMetrics] = useState({ width: 0, height: 0, scrollTop: 0 });
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const [thumbnailMap, setThumbnailMap] = useState<Record<string, string>>({});
+  const [loadedThumbs, setLoadedThumbs] = useState<Set<string>>(new Set());
+  const thumbnailMapRef = useRef<Record<string, string>>({});
+  const thumbnailPendingRef = useRef<Set<string>>(new Set());
+  const thumbnailRetryRef = useRef<number | null>(null);
+  const [thumbnailRetryTick, setThumbnailRetryTick] = useState(0);
 
   const bridgeAvailable = typeof window !== "undefined" && !!window.comfy;
 
   useEffect(() => {
-    const load = async () => {
-      const [albumRows, imageRows, storedIconSize, storedAlbum, storedAlbumSort, storedImageSort] = await Promise.all([
-        getAlbums(),
-        getImages(),
-        getAppPref<number>("iconSize"),
-        getAppPref<string>("activeAlbum"),
-        getAppPref<AlbumSort>("albumSort"),
-        getAppPref<ImageSort>("imageSort"),
-      ]);
-      const imagesWithUrls = await attachFileUrls(imageRows);
-      setAlbums(albumRows);
-      setImages(imagesWithUrls);
-      if (storedIconSize) {
-        setIconSize(storedIconSize);
-      }
-  if (storedAlbum && albumRows.some((album: Album) => album.id === storedAlbum)) {
-        setActiveAlbum(storedAlbum as string | "all");
-      } else if (storedAlbum) {
-        setActiveAlbum("all");
-      }
-      if (storedAlbumSort) {
-        setAlbumSort(storedAlbumSort);
-      }
-      if (storedImageSort) {
-        setImageSort(storedImageSort);
-      }
-    };
-    load();
+    console.log("[comfy-browser] UI mounted");
   }, []);
 
   useEffect(() => {
     document.documentElement.style.setProperty("--icon-size", `${iconSize}px`);
   }, [iconSize]);
+
+  useEffect(() => {
+    thumbnailMapRef.current = thumbnailMap;
+  }, [thumbnailMap]);
+
+  useEffect(() => {
+    return () => {
+      if (thumbnailRetryRef.current) {
+        window.clearTimeout(thumbnailRetryRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -241,6 +238,10 @@ export default function App() {
   }, [activeAlbum]);
 
   useEffect(() => {
+    console.log("[comfy-browser] Active album changed", activeAlbum);
+  }, [activeAlbum]);
+
+  useEffect(() => {
     const timeout = window.setTimeout(() => {
       void setAppPref("albumSort", albumSort);
     }, 200);
@@ -259,6 +260,7 @@ export default function App() {
   }, [albums]);
 
   const filteredImages = useMemo(() => {
+    const start = performance.now();
     const query = search.trim().toLowerCase();
     const visible = images.filter((image) => {
       if (activeAlbum !== "all" && image.albumId !== activeAlbum) {
@@ -292,6 +294,14 @@ export default function App() {
           return 0;
       }
     });
+    const duration = performance.now() - start;
+    if (duration > 50) {
+      console.log("[comfy-browser] Filter/sort cost", {
+        durationMs: Number(duration.toFixed(1)),
+        total: images.length,
+        visible: sorted.length,
+      });
+    }
     return sorted;
   }, [images, search, albumById, activeAlbum, imageSort]);
 
@@ -314,6 +324,238 @@ export default function App() {
     return sorted;
   }, [albums, albumSort]);
 
+  const hydrateFileUrls = useCallback(
+    (sourceImages: IndexedImage[]) => {
+      if (!bridgeAvailable || sourceImages.length === 0) return () => undefined;
+      let cancelled = false;
+      let cursor = 0;
+
+      const requestIdle = (callback: () => void) => {
+        if ("requestIdleCallback" in window) {
+          return (window as Window & { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(callback);
+        }
+        return globalThis.setTimeout(callback, 0);
+      };
+
+      const cancelIdle = (id: number) => {
+        if ("cancelIdleCallback" in window) {
+          (window as Window & { cancelIdleCallback: (cb: number) => void }).cancelIdleCallback(id);
+        } else {
+          globalThis.clearTimeout(id);
+        }
+      };
+
+      let idleId: number | null = null;
+
+      const runBatch = async () => {
+        if (cancelled) return;
+        const batch = sourceImages.slice(cursor, cursor + FILE_URL_BATCH_SIZE);
+        if (!batch.length) {
+          console.log("[comfy-browser] File URL hydration complete");
+          return;
+        }
+
+        const updates = await Promise.all(
+          batch.map(async (image) => {
+            if (image.fileUrl !== image.filePath) {
+              return { id: image.id, fileUrl: image.fileUrl };
+            }
+            try {
+              const fileUrl = await window.comfy.toFileUrl(image.filePath);
+              return { id: image.id, fileUrl };
+            } catch {
+              return { id: image.id, fileUrl: image.filePath };
+            }
+          })
+        );
+
+        if (cancelled) return;
+        const updateMap = new Map(updates.map((item) => [item.id, item.fileUrl]));
+        setImages((prev) =>
+          prev.map((image) => {
+            const nextUrl = updateMap.get(image.id);
+            return nextUrl ? { ...image, fileUrl: nextUrl } : image;
+          })
+        );
+
+        cursor += FILE_URL_BATCH_SIZE;
+        idleId = requestIdle(() => {
+          void runBatch();
+        });
+      };
+
+  console.log("[comfy-browser] Starting file URL hydration", { total: sourceImages.length });
+      idleId = requestIdle(() => {
+        void runBatch();
+      });
+
+      return () => {
+        cancelled = true;
+        if (idleId !== null) {
+          cancelIdle(idleId);
+        }
+      };
+    },
+    [bridgeAvailable]
+  );
+
+  const resolveFileUrlsForTabs = useCallback(
+    async (imagesToOpen: IndexedImage[]) => {
+      if (!bridgeAvailable) return imagesToOpen;
+      const updates = await Promise.all(
+        imagesToOpen.map(async (image) => {
+          if (image.fileUrl !== image.filePath) return image;
+          try {
+            const fileUrl = await window.comfy.toFileUrl(image.filePath);
+            return { ...image, fileUrl };
+          } catch {
+            return image;
+          }
+        })
+      );
+
+      setImages((prev) =>
+        prev.map((image) => {
+          const updated = updates.find((entry: IndexedImage) => entry.id === image.id);
+          return updated ? { ...image, fileUrl: updated.fileUrl } : image;
+        })
+      );
+
+      return updates;
+    },
+    [bridgeAvailable]
+  );
+
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    const load = async () => {
+  console.log("[comfy-browser] Loading albums and images...");
+      const [albumRows, imageRows, storedIconSize, storedAlbum, storedAlbumSort, storedImageSort] = await Promise.all([
+        getAlbums(),
+        getImages(),
+        getAppPref<number>("iconSize"),
+        getAppPref<string>("activeAlbum"),
+        getAppPref<AlbumSort>("albumSort"),
+        getAppPref<ImageSort>("imageSort"),
+      ]);
+      const baseImages = imageRows.map((image) => ({ ...image, fileUrl: image.filePath }));
+      console.log("[comfy-browser] Loaded", {
+        albums: albumRows.length,
+        images: baseImages.length,
+      });
+      setAlbums(albumRows);
+      setImages(baseImages);
+      cleanup = hydrateFileUrls(baseImages);
+      if (storedIconSize) {
+        setIconSize(storedIconSize);
+      }
+      if (storedAlbum && albumRows.some((album: Album) => album.id === storedAlbum)) {
+        setActiveAlbum(storedAlbum as string | "all");
+      } else if (storedAlbum) {
+        setActiveAlbum("all");
+      }
+      if (storedAlbumSort) {
+        setAlbumSort(storedAlbumSort);
+      }
+      if (storedImageSort) {
+        setImageSort(storedImageSort);
+      }
+    };
+    load();
+    return () => cleanup?.();
+  }, [hydrateFileUrls]);
+
+  const gridColumnCount = useMemo(() => {
+    if (!gridMetrics.width) return 1;
+    return Math.max(1, Math.floor((gridMetrics.width + GRID_GAP) / (iconSize + GRID_GAP)));
+  }, [gridMetrics.width, iconSize]);
+
+  const rowHeight = iconSize + CARD_META_HEIGHT + GRID_GAP;
+  const totalRows = Math.ceil(filteredImages.length / gridColumnCount);
+  const startRow = Math.max(0, Math.floor(gridMetrics.scrollTop / rowHeight) - 1);
+  const endRow = Math.min(
+    totalRows - 1,
+    Math.ceil((gridMetrics.scrollTop + gridMetrics.height) / rowHeight) + 1
+  );
+  const startIndex = startRow * gridColumnCount;
+  const endIndex = Math.min(filteredImages.length, (endRow + 1) * gridColumnCount);
+  const visibleImages = filteredImages.slice(startIndex, endIndex);
+
+  useEffect(() => {
+    if (!bridgeAvailable) return;
+    let cancelled = false;
+    let idleId: number | null = null;
+
+    const requestIdle = (callback: () => void) => {
+      if ("requestIdleCallback" in window) {
+        return (window as Window & { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(callback);
+      }
+      return globalThis.setTimeout(callback, 0);
+    };
+
+    const cancelIdle = (id: number) => {
+      if ("cancelIdleCallback" in window) {
+        (window as Window & { cancelIdleCallback: (cb: number) => void }).cancelIdleCallback(id);
+      } else {
+        globalThis.clearTimeout(id);
+      }
+    };
+
+    const scheduleRetry = () => {
+      if (thumbnailRetryRef.current) return;
+      thumbnailRetryRef.current = window.setTimeout(() => {
+        thumbnailRetryRef.current = null;
+        setThumbnailRetryTick((tick) => tick + 1);
+      }, THUMBNAIL_RETRY_MS);
+    };
+
+    const fetchThumbs = async () => {
+      const currentMap = thumbnailMapRef.current;
+      const missing = visibleImages.filter((image) => !currentMap[image.id]);
+      if (!missing.length) return;
+
+      console.log("[comfy-browser] Fetching thumbnails", {
+        visible: visibleImages.length,
+        missing: missing.length,
+        batch: Math.min(THUMBNAIL_BATCH_SIZE, missing.length),
+      });
+
+      for (const image of missing.slice(0, THUMBNAIL_BATCH_SIZE)) {
+        if (thumbnailPendingRef.current.has(image.id)) continue;
+        thumbnailPendingRef.current.add(image.id);
+
+        try {
+          const url = await window.comfy.getThumbnail(image.filePath);
+          if (cancelled) return;
+
+          thumbnailPendingRef.current.delete(image.id);
+          if (url) {
+            setThumbnailMap((prev) => ({ ...prev, [image.id]: url }));
+          } else {
+            scheduleRetry();
+          }
+        } catch (error) {
+          thumbnailPendingRef.current.delete(image.id);
+          console.log("[comfy-browser] Thumbnail fetch failed", {
+            filePath: image.filePath,
+            error,
+          });
+          scheduleRetry();
+        }
+      }
+    };
+
+    idleId = requestIdle(() => {
+      void fetchThumbs();
+    });
+    return () => {
+      cancelled = true;
+      if (idleId !== null) {
+        cancelIdle(idleId);
+      }
+    };
+  }, [visibleImages, bridgeAvailable, thumbnailRetryTick]);
+
   const toggleSelection = (id: string, multi: boolean) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -335,12 +577,13 @@ export default function App() {
     });
   };
 
-  const handleOpenImages = (imagesToOpen: IndexedImage[]) => {
+  const handleOpenImages = async (imagesToOpen: IndexedImage[]) => {
+    const resolvedImages = await resolveFileUrlsForTabs(imagesToOpen);
     setTabs((prev) => {
       const existingIds = new Set(prev.map((tab) => tab.id));
-      const additions = imagesToOpen
-        .filter((image) => !existingIds.has(image.id))
-        .map((image) => ({
+      const additions = resolvedImages
+        .filter((image: IndexedImage) => !existingIds.has(image.id))
+        .map((image: IndexedImage) => ({
           id: image.id,
           title: image.fileName,
           type: "image" as const,
@@ -349,12 +592,12 @@ export default function App() {
       return [LibraryTab, ...prev.filter((tab) => tab.id !== "library"), ...additions];
     });
     setActiveTab((current) => {
-      if (imagesToOpen.length === 1) {
+      if (resolvedImages.length === 1) {
         return {
-          id: imagesToOpen[0].id,
-          title: imagesToOpen[0].fileName,
+          id: resolvedImages[0].id,
+          title: resolvedImages[0].fileName,
           type: "image" as const,
-          image: imagesToOpen[0],
+          image: resolvedImages[0],
         };
       }
       return current;
@@ -484,10 +727,11 @@ export default function App() {
 
       const newAlbums = results.flatMap((result) => result.album);
       const newImages = results.flatMap((result) => result.images);
-      const newImagesWithUrls = await attachFileUrls(newImages);
+      const baseImages = newImages.map((image) => ({ ...image, fileUrl: image.filePath }));
 
       setAlbums((prev) => [...prev, ...newAlbums]);
-      setImages((prev) => [...prev, ...newImagesWithUrls]);
+      setImages((prev) => [...prev, ...baseImages]);
+      hydrateFileUrls(baseImages);
     } finally {
       setIsIndexing(false);
     }
@@ -604,6 +848,30 @@ export default function App() {
       unsubscribeComplete();
     };
   }, [bridgeAvailable]);
+
+  useEffect(() => {
+    const target = gridRef.current;
+    if (!target) return;
+
+    const update = () => {
+      setGridMetrics((prev) => ({
+        ...prev,
+        width: target.clientWidth,
+        height: target.clientHeight,
+      }));
+    };
+
+    update();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", update);
+      return () => window.removeEventListener("resize", update);
+    }
+
+    const observer = new ResizeObserver(() => update());
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [gridRef, filteredImages.length, iconSize]);
 
   useEffect(() => {
     if (!lastCopied) return;
@@ -848,33 +1116,64 @@ export default function App() {
           </div>
 
           {activeTab.type === "library" ? (
-            <section className="flex-1 overflow-auto p-4 scrollbar-thin">
-              <div className="icon-grid grid gap-4">
-                {filteredImages.map((image) => {
-                  const isSelected = selectedIds.has(image.id);
-                  return (
-                    <button
-                      key={image.id}
-                      type="button"
-                      onClick={(event) => toggleSelection(image.id, event.metaKey || event.ctrlKey)}
-                      onDoubleClick={() => handleOpenImages([image])}
-                      className={`rounded-xl border p-2 text-left transition ${
-                        isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800 hover:border-slate-600"
-                      }`}
-                    >
-                      <div className="aspect-square overflow-hidden rounded-lg bg-slate-950 p-1">
-                        <img
-                          src={image.fileUrl}
-                          alt={image.fileName}
-                          className="h-full w-full object-contain"
-                          draggable={false}
-                        />
-                      </div>
-                      <div className="mt-2 text-xs text-slate-300">{image.fileName}</div>
-                      <div className="text-[11px] text-slate-500">{formatBytes(image.sizeBytes)}</div>
-                    </button>
-                  );
-                })}
+            <section className="flex-1 overflow-hidden">
+              <div
+                ref={gridRef}
+                onScroll={(event) => {
+                  const target = event.currentTarget;
+                  setGridMetrics((prev) => ({ ...prev, scrollTop: target.scrollTop }));
+                }}
+                className="h-full overflow-auto p-4 scrollbar-thin"
+              >
+                {/* eslint-disable-next-line react/forbid-dom-props */}
+                <div className="relative" style={{ height: totalRows * rowHeight }}>
+                  {visibleImages.map((image, index) => {
+                    const absoluteIndex = startIndex + index;
+                    const row = Math.floor(absoluteIndex / gridColumnCount);
+                    const col = absoluteIndex % gridColumnCount;
+                    const top = row * rowHeight;
+                    const left = col * (iconSize + GRID_GAP);
+                    const isSelected = selectedIds.has(image.id);
+                    const thumbUrl = thumbnailMap[image.id] ?? image.fileUrl;
+                    const isLoaded = loadedThumbs.has(image.id);
+
+                    return (
+                      <button
+                        key={image.id}
+                        type="button"
+                        onClick={(event) => toggleSelection(image.id, event.metaKey || event.ctrlKey)}
+                        onDoubleClick={() => {
+                          void handleOpenImages([image]);
+                        }}
+                        className={`absolute rounded-xl border p-2 text-left transition ${
+                          isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800 hover:border-slate-600"
+                        }`}
+                        /* eslint-disable-next-line react/forbid-dom-props */
+                        style={{ top, left, width: iconSize, height: rowHeight - GRID_GAP }}
+                      >
+                        <div className="relative aspect-square overflow-hidden rounded-lg bg-slate-950 p-1">
+                          {!isLoaded ? (
+                            <div className="absolute inset-0 animate-pulse rounded-lg bg-slate-900" />
+                          ) : null}
+                          <img
+                            src={thumbUrl}
+                            alt={image.fileName}
+                            loading="lazy"
+                            className={`h-full w-full object-contain transition-opacity ${
+                              isLoaded ? "opacity-100" : "opacity-0"
+                            }`}
+                            draggable={false}
+                            onLoad={() => {
+                              setLoadedThumbs((prev) => new Set(prev).add(image.id));
+                            }}
+                          />
+                        </div>
+                        <div className="mt-2 text-xs text-slate-300">{image.fileName}</div>
+                        <div className="text-[11px] text-slate-500">{formatBytes(image.sizeBytes)}</div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </section>
           ) : activeTabContent ? (
