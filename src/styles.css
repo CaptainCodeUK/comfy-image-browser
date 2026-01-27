@@ -54,8 +54,15 @@ body {
 }
 
 /* stylelint-disable-next-line plugin/no-unsupported-browser-features */
+
 .tab-scroll {
   scrollbar-gutter: stable;
+  min-height: 28px;
+  padding-bottom: 0;
+}
+
+.tab-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb {

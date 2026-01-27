@@ -172,6 +172,8 @@ export default function App() {
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const viewerFocusRef = useRef<HTMLDivElement | null>(null);
+  const tabRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const tabScrollRef = useRef<HTMLDivElement | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [lastCopied, setLastCopied] = useState<string | null>(null);
   const [albumSort, setAlbumSort] = useState<AlbumSort>("name-asc");
@@ -1052,6 +1054,13 @@ export default function App() {
   const selectedImages = images.filter((image) => selectedIds.has(image.id));
   const metadataSummary = activeTab.type === "image" ? extractMetadataSummary(activeTab.image.metadataText) : null;
 
+  useEffect(() => {
+    const node = tabRefs.current[activeTab.id];
+    if (node) {
+      node.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+    }
+  }, [activeTab]);
+
   const copyToClipboard = async (value: string, label: string) => {
     if (!navigator.clipboard) return;
     try {
@@ -1129,7 +1138,7 @@ export default function App() {
       {isIndexing ? (
         <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-slate-950/70">
           <div className="rounded-2xl border border-slate-800 bg-slate-950/90 px-6 py-4 text-sm text-slate-100 shadow-xl">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 h-full">
               <div className="h-3 w-3 animate-pulse rounded-full bg-indigo-400" />
               <span>Indexing images… this may take a moment.</span>
             </div>
@@ -1307,65 +1316,106 @@ export default function App() {
             </div>
           </div>
 
-          <div className="border-b border-slate-800 bg-slate-950/20 px-4 py-2">
+          <div className="border-b border-slate-800 bg-slate-950/20">
             <div className="flex items-center gap-3">
-              <div className="flex-1 overflow-x-scroll tab-scroll pb-1">
-                <div className="flex items-center gap-2 pl-0">
-                  {tabs.map((tab) => {
-                    const isActive = activeTab.id === tab.id;
-                    return (
-                      <div
-                        key={tab.id}
-                        className={`flex flex-none items-center gap-2 rounded-lg px-4 py-1 text-sm ${
-                          isActive ? "bg-indigo-500 text-white" : "bg-slate-800 text-slate-200"
-                        }`}
-                      >
-                        <button
-                          onClick={() => setActiveTab(tab)}
-                          onMouseDown={(event) => {
-                            if (event.button === 1) {
-                              event.preventDefault();
-                              handleCloseTab(tab.id);
-                            }
-                          }}
-                          className="truncate"
-                          aria-current={isActive ? "page" : undefined}
-                        >
-                          {tab.title}
-                        </button>
-                        {tab.type === "image" ? (
-                          <button
-                            onClick={() => handleCloseTab(tab.id)}
-                            className="rounded-md px-1 text-xs text-slate-200/80 hover:bg-white/10"
-                            aria-label={`Close ${tab.title}`}
-                          >
-                            ×
-                          </button>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
+              <div
+                ref={(node) => {
+                  tabRefs.current.library = node;
+                }}
+                className={`flex h-7 flex-none items-center gap-2 px-4 py-0 text-sm ${
+                  activeTab.id === "library"
+                    ? "bg-indigo-500 text-white"
+                    : "bg-slate-800 text-slate-200"
+                }`}
+              >
+                <button
+                  onClick={() => setActiveTab(LibraryTab)}
+                  className="truncate"
+                  aria-current={activeTab.id === "library" ? "page" : undefined}
+                >
+                  Library
+                </button>
               </div>
-              <div className="flex flex-none items-center gap-2">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => tabScrollRef.current?.scrollBy({ left: -200, behavior: "smooth" })}
+                  className="h-7 rounded-md border border-slate-700 px-2 py-0 text-xs text-slate-300"
+                  aria-label="Scroll tabs left"
+                >
+                  ◀
+                </button>
+                <div ref={tabScrollRef} className="min-w-0 flex-1 h-full overflow-x-auto tab-scroll">
+                  <div className="flex items-center gap-2 pl-0">
+                    {tabs
+                      .filter((tab) => tab.id !== "library")
+                      .map((tab) => {
+                        const isActive = activeTab.id === tab.id;
+                        return (
+                          <div
+                            key={tab.id}
+                            ref={(node) => {
+                              tabRefs.current[tab.id] = node;
+                            }}
+                            className={`flex h-7 flex-none items-center gap-2 rounded-lg px-4 py-0 text-sm ${
+                              isActive ? "bg-indigo-500 text-white" : "bg-slate-800 text-slate-200"
+                            }`}
+                          >
+                            <button
+                              onClick={() => setActiveTab(tab)}
+                              onMouseDown={(event) => {
+                                if (event.button === 1) {
+                                  event.preventDefault();
+                                  handleCloseTab(tab.id);
+                                }
+                              }}
+                              className="truncate"
+                              aria-current={isActive ? "page" : undefined}
+                            >
+                              {tab.title}
+                            </button>
+                            {tab.type === "image" ? (
+                              <button
+                                onClick={() => handleCloseTab(tab.id)}
+                                className="rounded-md px-1 text-xs text-slate-200/80 hover:bg-white/10"
+                                aria-label={`Close ${tab.title}`}
+                              >
+                                ×
+                              </button>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => tabScrollRef.current?.scrollBy({ left: 200, behavior: "smooth" })}
+                  className="h-7 rounded-md border border-slate-700 px-2 py-0 text-xs text-slate-300"
+                  aria-label="Scroll tabs right"
+                >
+                  ▶
+                </button>
+              </div>
+              <div className="flex flex-none items-center gap-2 px-2">
                 <button
                   onClick={handleDuplicateTab}
                   disabled={activeTab.type !== "image"}
-                  className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-300 disabled:opacity-40"
+                  className="h-7 rounded-md border border-slate-700 px-3 py-0 text-xs text-slate-300 disabled:opacity-40"
                 >
                   Duplicate
                 </button>
                 <button
                   onClick={handleCloseAllTabs}
                   disabled={tabs.length <= 1}
-                  className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-300 disabled:opacity-40"
+                  className="h-7 rounded-md border border-slate-700 px-3 py-0 text-xs text-slate-300 disabled:opacity-40"
                 >
                   Close all
                 </button>
                 <button
                   onClick={() => handleCloseOtherTabs(activeTab.id)}
                   disabled={tabs.length <= 2 || activeTab.id === "library"}
-                  className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-300 disabled:opacity-40"
+                  className="h-7 rounded-md border border-slate-700 px-3 py-0 text-xs text-slate-300 disabled:opacity-40"
                 >
                   Close others
                 </button>
