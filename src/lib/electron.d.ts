@@ -4,7 +4,10 @@ declare global {
   interface Window {
     comfy: {
       selectFolders: () => Promise<string[]>;
-      indexFolders: (paths: string[]) => Promise<Array<{ rootPath: string; images: IndexedImagePayload[] }>>;
+      indexFolders: (
+        paths: string[],
+        existingPaths?: string[]
+      ) => Promise<Array<{ rootPath: string; images: IndexedImagePayload[] }>>;
   cancelIndexing: () => Promise<void>;
       toFileUrl: (filePath: string) => Promise<string>;
       getThumbnail: (filePath: string) => Promise<string | null>;

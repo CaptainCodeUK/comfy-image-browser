@@ -427,7 +427,7 @@ const collectImageFiles = async (rootPath: string) => {
   return results;
 };
 
-const scanFolderTree = async (rootPath: string) => {
+const scanFolderTree = async (rootPath: string, existingFiles: Set<string>) => {
   const folders: string[] = [rootPath];
   const files: string[] = [];
   const stack = [rootPath];
@@ -447,7 +447,7 @@ const scanFolderTree = async (rootPath: string) => {
         stack.push(resolved);
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
-        if (IMAGE_EXTENSIONS.has(ext)) {
+        if (IMAGE_EXTENSIONS.has(ext) && !existingFiles.has(resolved)) {
           files.push(resolved);
         }
       }
@@ -495,74 +495,78 @@ ipcMain.handle("comfy:select-folders", async () => {
   return result.filePaths;
 });
 
-ipcMain.handle("comfy:index-folders", async (_event: IpcMainInvokeEvent, rootPaths: string[]) => {
+ipcMain.handle(
+  "comfy:index-folders",
+  async (_event: IpcMainInvokeEvent, rootPaths: string[], existingPaths: string[] = []) => {
+    const existingFiles = new Set(existingPaths);
   const cancelToken = { cancelled: false };
   indexingCancels.set(_event.sender.id, cancelToken);
   const albums: Array<{ rootPath: string; images: IndexedImagePayload[] }> = [];
-  const scans = await Promise.all(rootPaths.map((rootPath) => scanFolderTree(rootPath)));
+    const scans = await Promise.all(rootPaths.map((rootPath) => scanFolderTree(rootPath, existingFiles)));
   const albumFolders: Array<{ rootPath: string; folderPath: string; files: string[] }> = [];
 
-  for (let i = 0; i < rootPaths.length; i += 1) {
-    const rootPath = rootPaths[i];
-    const files = scans[i].files;
-    const folderMap = new Map<string, string[]>();
+    for (let i = 0; i < rootPaths.length; i += 1) {
+      const rootPath = rootPaths[i];
+      const files = scans[i].files;
+      const folderMap = new Map<string, string[]>();
 
-    for (const filePath of files) {
-      const folder = path.dirname(filePath);
-      const existing = folderMap.get(folder);
-      if (existing) {
-        existing.push(filePath);
-      } else {
-        folderMap.set(folder, [filePath]);
+      for (const filePath of files) {
+        const folder = path.dirname(filePath);
+        const existing = folderMap.get(folder);
+        if (existing) {
+          existing.push(filePath);
+        } else {
+          folderMap.set(folder, [filePath]);
+        }
+      }
+
+      for (const [folderPath, folderFiles] of folderMap.entries()) {
+        if (!folderFiles.length) continue;
+        albumFolders.push({ rootPath: folderPath, folderPath, files: folderFiles });
       }
     }
 
-    for (const [folderPath, folderFiles] of folderMap.entries()) {
-      if (!folderFiles.length) continue;
-      albumFolders.push({ rootPath: folderPath, folderPath, files: folderFiles });
-    }
-  }
+    const totalImages = albumFolders.reduce((sum, album) => sum + album.files.length, 0);
+    let folderIndex = 0;
+    let imageIndex = 0;
 
-  const totalImages = albumFolders.reduce((sum, album) => sum + album.files.length, 0);
-  let folderIndex = 0;
-  let imageIndex = 0;
-
-  for (const albumFolder of albumFolders) {
-    if (cancelToken.cancelled) {
-      _event.sender.send("comfy:indexing-complete");
-      indexingCancels.delete(_event.sender.id);
-      return [];
-    }
-    folderIndex += 1;
-    _event.sender.send("comfy:indexing-folder", {
-      current: folderIndex,
-      total: albumFolders.length,
-      folder: albumFolder.folderPath,
-    });
-
-    const images: IndexedImagePayload[] = [];
-    for (const filePath of albumFolder.files) {
+    for (const albumFolder of albumFolders) {
       if (cancelToken.cancelled) {
         _event.sender.send("comfy:indexing-complete");
         indexingCancels.delete(_event.sender.id);
         return [];
       }
-      imageIndex += 1;
-      _event.sender.send("comfy:indexing-image", {
-        current: imageIndex,
-        total: totalImages,
-        fileName: path.basename(filePath),
+      folderIndex += 1;
+      _event.sender.send("comfy:indexing-folder", {
+        current: folderIndex,
+        total: albumFolders.length,
+        folder: albumFolder.folderPath,
       });
-      images.push(await buildImagePayload(filePath, albumFolder.rootPath));
+
+      const images: IndexedImagePayload[] = [];
+      for (const filePath of albumFolder.files) {
+        if (cancelToken.cancelled) {
+          _event.sender.send("comfy:indexing-complete");
+          indexingCancels.delete(_event.sender.id);
+          return [];
+        }
+        imageIndex += 1;
+        _event.sender.send("comfy:indexing-image", {
+          current: imageIndex,
+          total: totalImages,
+          fileName: path.basename(filePath),
+        });
+        images.push(await buildImagePayload(filePath, albumFolder.rootPath));
+      }
+
+      albums.push({ rootPath: albumFolder.rootPath, images });
     }
 
-    albums.push({ rootPath: albumFolder.rootPath, images });
+    _event.sender.send("comfy:indexing-complete");
+    indexingCancels.delete(_event.sender.id);
+    return albums;
   }
-
-  _event.sender.send("comfy:indexing-complete");
-  indexingCancels.delete(_event.sender.id);
-  return albums;
-});
+);
 
 ipcMain.handle("comfy:cancel-indexing", (event) => {
   const token = indexingCancels.get(event.sender.id);

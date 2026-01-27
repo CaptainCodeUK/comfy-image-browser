@@ -182,6 +182,7 @@ export default function App() {
   const [selectedAlbumIds, setSelectedAlbumIds] = useState<Set<string>>(new Set());
   const [folderProgress, setFolderProgress] = useState<ProgressState>(null);
   const [imageProgress, setImageProgress] = useState<ProgressState>(null);
+  const [removalProgress, setRemovalProgress] = useState<ProgressState>(null);
   const indexingTokenRef = useRef<{ cancelled: boolean }>({ cancelled: false });
   const [cancelingIndex, setCancelingIndex] = useState(false);
   const [gridMetrics, setGridMetrics] = useState({ width: 0, height: 0, scrollTop: 0 });
@@ -957,7 +958,9 @@ export default function App() {
     const albumName = albums.find((album) => album.id === albumId)?.name ?? "this album";
     const confirmed = window.confirm(`Remove ${albumName} from the index?`);
     if (!confirmed) return;
+    setRemovalProgress({ current: 0, total: 1, label: albumName });
     await removeAlbumFromIndex(albumId);
+    setRemovalProgress(null);
   };
 
   const handleToggleAlbumSelection = (albumId: string) => {
@@ -977,9 +980,15 @@ export default function App() {
     const confirmed = window.confirm(`Remove ${selectedAlbumIds.size} album(s) from the index?`);
     if (!confirmed) return;
     const ids = Array.from(selectedAlbumIds);
+    let index = 0;
+    setRemovalProgress({ current: 0, total: ids.length, label: "" });
     for (const id of ids) {
+      index += 1;
+      const name = albums.find((album) => album.id === id)?.name ?? "Album";
+      setRemovalProgress({ current: index, total: ids.length, label: name });
       await removeAlbumFromIndex(id);
     }
+    setRemovalProgress(null);
   };
 
   const handleSelectAllImages = () => {
@@ -1179,7 +1188,10 @@ export default function App() {
     setImageProgress(null);
     try {
       const rootPaths = targets.map((album) => album.rootPath);
-      const payload = (await window.comfy.indexFolders(rootPaths)) as Array<{
+      const payload = (await window.comfy.indexFolders(
+        rootPaths,
+        images.map((image) => image.filePath)
+      )) as Array<{
         rootPath: string;
         images: IndexedImagePayload[];
       }>;
@@ -1239,7 +1251,10 @@ export default function App() {
         setLastCopied("Folders already indexed");
         return;
       }
-      const payload = (await window.comfy.indexFolders(uniquePaths)) as Array<{
+      const payload = (await window.comfy.indexFolders(
+        uniquePaths,
+        images.map((image) => image.filePath)
+      )) as Array<{
         rootPath: string;
         images: IndexedImagePayload[];
       }>;
@@ -1637,6 +1652,28 @@ export default function App() {
                 >
                   {cancelingIndex ? "Canceling…" : "Cancel"}
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {removalProgress ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/70">
+          <div className="pointer-events-auto rounded-2xl border border-slate-800 bg-slate-950/90 px-6 py-4 text-sm text-slate-100 shadow-xl">
+            <div className="flex items-center gap-3 h-full">
+              <div className="h-3 w-3 animate-pulse rounded-full bg-rose-400" />
+              <span>Removing albums…</span>
+            </div>
+            <div className="mt-4 space-y-3 text-xs text-slate-300">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span>Albums</span>
+                  <span>{`${removalProgress.current} / ${removalProgress.total}`}</span>
+                </div>
+                <progress className="progress-bar" value={removalProgress.current} max={removalProgress.total} />
+                <div className="mt-1 truncate text-[11px] text-slate-400" title={removalProgress.label}>
+                  {removalProgress.label}
+                </div>
               </div>
             </div>
           </div>
