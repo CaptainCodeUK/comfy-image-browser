@@ -250,6 +250,10 @@ export default function App() {
     return new Map(albums.map((album) => [album.id, album]));
   }, [albums]);
 
+  const imageById = useMemo(() => {
+    return new Map(images.map((image) => [image.id, image]));
+  }, [images]);
+
   const filteredImages = useMemo(() => {
     const start = performance.now();
     const query = search.trim().toLowerCase();
@@ -887,10 +891,7 @@ export default function App() {
     await handleRemoveImages(Array.from(selectedIds));
   };
 
-  const handleRemoveAlbum = async (albumId: string) => {
-    const albumName = albums.find((album) => album.id === albumId)?.name ?? "this album";
-    const confirmed = window.confirm(`Remove ${albumName} from the index?`);
-    if (!confirmed) return;
+  const removeAlbumFromIndex = async (albumId: string) => {
     await removeAlbumById(albumId);
     setAlbums((prev) => prev.filter((album) => album.id !== albumId));
     setImages((prev) => prev.filter((image) => image.albumId !== albumId));
@@ -914,6 +915,13 @@ export default function App() {
     });
   };
 
+  const handleRemoveAlbum = async (albumId: string) => {
+    const albumName = albums.find((album) => album.id === albumId)?.name ?? "this album";
+    const confirmed = window.confirm(`Remove ${albumName} from the index?`);
+    if (!confirmed) return;
+    await removeAlbumFromIndex(albumId);
+  };
+
   const handleToggleAlbumSelection = (albumId: string) => {
     setSelectedAlbumIds((prev) => {
       const next = new Set(prev);
@@ -932,24 +940,66 @@ export default function App() {
     if (!confirmed) return;
     const ids = Array.from(selectedAlbumIds);
     for (const id of ids) {
-      await removeAlbumById(id);
+      await removeAlbumFromIndex(id);
     }
-    setAlbums((prev) => prev.filter((album) => !selectedAlbumIds.has(album.id)));
-    setImages((prev) => prev.filter((image) => !selectedAlbumIds.has(image.albumId)));
-    setTabs((prev) => prev.filter((tab) => tab.type === "library" || !selectedAlbumIds.has(tab.image.albumId)));
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      images.forEach((image) => {
-        if (selectedAlbumIds.has(image.albumId)) {
-          next.delete(image.id);
-        }
-      });
-      return next;
+  };
+
+  const handleRevealInFolder = async (filePath: string | undefined) => {
+    if (!bridgeAvailable || !filePath || !window.comfy?.revealInFolder) return;
+    await window.comfy.revealInFolder(filePath);
+  };
+
+  const handleDeleteImagesFromDisk = async (ids: string[], label: string) => {
+    if (!bridgeAvailable || !window.comfy?.deleteFilesFromDisk) return [];
+    if (!ids.length) return [];
+    const filePaths = ids
+      .map((id) => imageById.get(id)?.filePath)
+      .filter((path): path is string => Boolean(path));
+    if (!filePaths.length) return [];
+    const result = await window.comfy.deleteFilesFromDisk({
+      paths: filePaths,
+      label,
+      detail: "This will permanently delete the file(s) from disk. This action cannot be undone.",
     });
-    if (ids.includes(activeAlbum)) {
-      setActiveAlbum("all");
+    if (!result || result.canceled || result.deletedPaths.length === 0) return [];
+    const deletedPathSet = new Set(result.deletedPaths);
+    const deletedIds = ids.filter((id) => deletedPathSet.has(imageById.get(id)?.filePath ?? ""));
+    if (!deletedIds.length) return [];
+    await handleRemoveImages(deletedIds);
+    return deletedIds;
+  };
+
+  const handleDeleteAlbumFromDisk = async (albumId: string) => {
+    const album = albums.find((entry) => entry.id === albumId);
+    if (!album) return;
+    const albumImageIds = images.filter((image) => image.albumId === albumId).map((image) => image.id);
+    if (!albumImageIds.length) return;
+    const deletedIds = await handleDeleteImagesFromDisk(albumImageIds, `${album.name} images`);
+    if (!deletedIds || deletedIds.length === 0) return;
+    const deletedSet = new Set(deletedIds);
+    const remaining = images.filter((image) => image.albumId === albumId && !deletedSet.has(image.id));
+    if (remaining.length === 0) {
+      await removeAlbumFromIndex(albumId);
     }
-    setSelectedAlbumIds(new Set());
+  };
+
+  const handleDeleteSelectedAlbumsFromDisk = async () => {
+    if (!selectedAlbumIds.size) return;
+    const ids = Array.from(selectedAlbumIds);
+    const albumImageIds = images
+      .filter((image) => selectedAlbumIds.has(image.albumId))
+      .map((image) => image.id);
+    if (!albumImageIds.length) return;
+    const deletedIds = await handleDeleteImagesFromDisk(albumImageIds, `${ids.length} album(s) images`);
+    if (!deletedIds || deletedIds.length === 0) return;
+    const deletedSet = new Set(deletedIds);
+    const remainingImages = images.filter((image) => !deletedSet.has(image.id));
+    const remainingAlbumIds = new Set(remainingImages.map((image) => image.albumId));
+    for (const albumId of ids) {
+      if (!remainingAlbumIds.has(albumId)) {
+        await removeAlbumFromIndex(albumId);
+      }
+    }
   };
 
   const handleImageContextMenu = async (event: React.MouseEvent, image: IndexedImage) => {
@@ -968,6 +1018,15 @@ export default function App() {
     if (action === "remove-selected-images") {
       await handleRemoveImages(Array.from(selectedIds));
     }
+    if (action === "delete-image-disk") {
+      await handleDeleteImagesFromDisk([image.id], image.fileName);
+    }
+    if (action === "delete-selected-images-disk") {
+      await handleDeleteImagesFromDisk(Array.from(selectedIds), `${selectedIds.size} selected images`);
+    }
+    if (action === "reveal-image") {
+      await handleRevealInFolder(image.filePath);
+    }
   };
 
   const handleAlbumContextMenu = async (event: React.MouseEvent, album: Album) => {
@@ -985,6 +1044,15 @@ export default function App() {
     }
     if (action === "remove-selected-albums") {
       await handleRemoveSelectedAlbums();
+    }
+    if (action === "delete-album-disk") {
+      await handleDeleteAlbumFromDisk(album.id);
+    }
+    if (action === "delete-selected-albums-disk") {
+      await handleDeleteSelectedAlbumsFromDisk();
+    }
+    if (action === "reveal-album") {
+      await handleRevealInFolder(album.rootPath);
     }
   };
 
@@ -1037,9 +1105,39 @@ export default function App() {
       }
       if (action === "remove-selected-albums") {
         void handleRemoveSelectedAlbums();
+        return;
+      }
+      if (action === "delete-selected-images-disk") {
+        void handleDeleteImagesFromDisk(Array.from(selectedIds), `${selectedIds.size} selected images`);
+        return;
+      }
+      if (action === "delete-selected-albums-disk") {
+        void handleDeleteSelectedAlbumsFromDisk();
+        return;
+      }
+      if (action === "reveal-active-image") {
+        void handleRevealInFolder(activeTab.type === "image" ? activeTab.image.filePath : undefined);
+        return;
+      }
+      if (action === "reveal-active-album") {
+        const targetAlbum = activeTab.type === "image" ? activeTab.image.albumId : activeAlbum;
+        const album = targetAlbum === "all" ? null : albumById.get(targetAlbum);
+        void handleRevealInFolder(album?.rootPath);
       }
     });
-  }, [bridgeAvailable, handleAddFolder, handleRemoveSelected, handleRemoveSelectedAlbums]);
+  }, [
+    bridgeAvailable,
+    handleAddFolder,
+    handleRemoveSelected,
+    handleRemoveSelectedAlbums,
+    handleDeleteSelectedAlbumsFromDisk,
+    handleDeleteImagesFromDisk,
+    handleRevealInFolder,
+    selectedIds,
+    activeTab,
+    activeAlbum,
+    albumById,
+  ]);
 
   const activeTabContent = useMemo(() => {
     if (activeTab.type === "library") return null;

@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld("comfy", {
       | { type: "image"; imageId: string; label: string; selectedCount: number; isSelected: boolean }
       | { type: "album"; albumId: string; label: string; selectedCount: number; isSelected: boolean }
   ) => ipcRenderer.invoke("comfy:show-context-menu", payload),
+  deleteFilesFromDisk: (payload: { paths: string[]; label: string; detail?: string }) =>
+    ipcRenderer.invoke("comfy:delete-files-from-disk", payload),
+  revealInFolder: (filePath: string) => ipcRenderer.invoke("comfy:reveal-in-folder", filePath),
   onMenuAction: (callback: (action: string) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, action: string) => callback(action);
     ipcRenderer.on("comfy:menu-action", listener);

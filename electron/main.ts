@@ -7,6 +7,7 @@ import {
   nativeImage,
   protocol,
   session,
+  shell,
   type IpcMainInvokeEvent,
 } from "electron";
 import path from "node:path";
@@ -165,12 +166,30 @@ const buildAppMenu = () => {
       },
       { type: "separator" },
       {
+        label: "Reveal Active Image",
+        click: () => sendMenuAction("reveal-active-image"),
+      },
+      {
+        label: "Reveal Active Album",
+        click: () => sendMenuAction("reveal-active-album"),
+      },
+      { type: "separator" },
+      {
         label: "Remove Selected Images",
         click: () => sendMenuAction("remove-selected-images"),
       },
       {
         label: "Remove Selected Albums",
         click: () => sendMenuAction("remove-selected-albums"),
+      },
+      { type: "separator" },
+      {
+        label: "Delete Selected Images from Disk…",
+        click: () => sendMenuAction("delete-selected-images-disk"),
+      },
+      {
+        label: "Delete Selected Albums from Disk…",
+        click: () => sendMenuAction("delete-selected-albums-disk"),
       },
       { type: "separator" },
       process.platform === "darwin" ? { role: "close" } : { role: "quit" },
@@ -483,6 +502,85 @@ ipcMain.handle("comfy:get-thumbnail", async (_event: IpcMainInvokeEvent, filePat
   return null;
 });
 
+ipcMain.handle("comfy:reveal-in-folder", async (_event: IpcMainInvokeEvent, filePath: string) => {
+  try {
+    const stats = await fs.stat(filePath);
+    if (stats.isDirectory()) {
+      await shell.openPath(filePath);
+      return;
+    }
+  } catch {
+    // fall back to reveal attempt
+  }
+  shell.showItemInFolder(filePath);
+});
+
+ipcMain.handle(
+  "comfy:delete-files-from-disk",
+  async (
+    event: IpcMainInvokeEvent,
+    payload: { paths: string[]; label: string; detail?: string }
+  ) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const target = window ?? BrowserWindow.getAllWindows()[0];
+    const message = `Delete ${payload.label} from disk?`;
+    const detail = payload.detail ?? "This will permanently delete the file(s) from disk.";
+    const result = await dialog.showMessageBox(target, {
+      type: "warning",
+      buttons: ["Delete", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      message,
+      detail,
+    });
+
+    if (result.response !== 0) {
+      return { deletedPaths: [], canceled: true };
+    }
+
+    const deletions = await Promise.allSettled(payload.paths.map((filePath) => fs.unlink(filePath)));
+    const deletedPaths = payload.paths.filter((_path, index) => deletions[index].status === "fulfilled");
+
+    const deletedFolders = new Set<string>();
+    const thumbDeletions = await Promise.allSettled(
+      deletedPaths.map(async (filePath) => {
+        const folder = path.dirname(filePath);
+        deletedFolders.add(folder);
+        const thumbPath = path.join(folder, THUMBNAIL_DIR, path.basename(filePath));
+        try {
+          await fs.unlink(thumbPath);
+        } catch {
+          // ignore missing thumbnails
+        }
+      })
+    );
+
+    void thumbDeletions;
+
+    const tryRemoveIfEmpty = async (dirPath: string) => {
+      try {
+        const entries = await fs.readdir(dirPath);
+        if (entries.length === 0) {
+          await fs.rmdir(dirPath);
+          return true;
+        }
+      } catch {
+        // ignore missing directories or permission issues
+      }
+      return false;
+    };
+
+    await Promise.all(
+      Array.from(deletedFolders).map(async (folder) => {
+        const thumbsDir = path.join(folder, THUMBNAIL_DIR);
+        await tryRemoveIfEmpty(thumbsDir);
+        await tryRemoveIfEmpty(folder);
+      })
+    );
+    return { deletedPaths, canceled: false };
+  }
+);
+
 ipcMain.handle(
   "comfy:show-context-menu",
   async (
@@ -506,26 +604,50 @@ ipcMain.handle(
 
       if (payload.type === "image") {
         items.push({
+          label: "Reveal in File Manager",
+          click: () => finish("reveal-image"),
+        });
+        items.push({
           label: `Remove ${payload.label} from index`,
           click: () => finish("remove-image"),
+        });
+        items.push({
+          label: `Delete ${payload.label} from disk…`,
+          click: () => finish("delete-image-disk"),
         });
         if (payload.selectedCount > 1) {
           items.push({
             label: `Remove selected images (${payload.selectedCount})`,
             click: () => finish("remove-selected-images"),
           });
+          items.push({
+            label: `Delete selected images (${payload.selectedCount}) from disk…`,
+            click: () => finish("delete-selected-images-disk"),
+          });
         }
       }
 
       if (payload.type === "album") {
         items.push({
+          label: "Reveal in File Manager",
+          click: () => finish("reveal-album"),
+        });
+        items.push({
           label: `Remove ${payload.label} from index`,
           click: () => finish("remove-album"),
+        });
+        items.push({
+          label: `Delete ${payload.label} images from disk…`,
+          click: () => finish("delete-album-disk"),
         });
         if (payload.selectedCount > 1) {
           items.push({
             label: `Remove selected albums (${payload.selectedCount})`,
             click: () => finish("remove-selected-albums"),
+          });
+          items.push({
+            label: `Delete selected albums (${payload.selectedCount}) from disk…`,
+            click: () => finish("delete-selected-albums-disk"),
           });
         }
       }
