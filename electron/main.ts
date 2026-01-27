@@ -15,6 +15,10 @@ const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 
 const COMFY_PROTOCOL = "comfy";
 const WINDOW_STATE_FILE = "window-state.json";
+const APP_NAME = "comfy-browser";
+
+app.setName(APP_NAME);
+app.setAppUserModelId(APP_NAME);
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -40,11 +44,19 @@ type IndexedImagePayload = {
   metadataJson: Record<string, unknown> | null;
 };
 
-const readWindowState = async () => {
+type WindowState = {
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+  isMaximized?: boolean;
+};
+
+const readWindowState = async (): Promise<WindowState | null> => {
   try {
     const statePath = path.join(app.getPath("userData"), WINDOW_STATE_FILE);
     const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = JSON.parse(raw) as { width: number; height: number; x: number; y: number };
+    const parsed = JSON.parse(raw) as WindowState;
     if (parsed.width && parsed.height) {
       return parsed;
     }
@@ -55,9 +67,14 @@ const readWindowState = async () => {
 };
 
 const persistWindowState = async (window: BrowserWindow) => {
-  const bounds = window.getBounds();
+  const bounds = window.isMaximized() || window.isMinimized() ? window.getNormalBounds() : window.getBounds();
   const statePath = path.join(app.getPath("userData"), WINDOW_STATE_FILE);
-  await fs.writeFile(statePath, JSON.stringify(bounds, null, 2));
+  await fs.mkdir(path.dirname(statePath), { recursive: true });
+  const payload: WindowState = {
+    ...bounds,
+    isMaximized: window.isMaximized(),
+  };
+  await fs.writeFile(statePath, JSON.stringify(payload, null, 2));
 };
 
 const createWindow = async () => {
@@ -74,13 +91,28 @@ const createWindow = async () => {
     },
   });
 
+  if (previousState?.isMaximized) {
+    mainWindow.maximize();
+  }
+
+  let saveTimeout: NodeJS.Timeout | null = null;
+  const scheduleSave = () => {
+    if (saveTimeout) {
+      clearTimeout(saveTimeout);
+    }
+    saveTimeout = setTimeout(() => {
+      void persistWindowState(mainWindow);
+    }, 300);
+  };
+
+  mainWindow.on("resize", scheduleSave);
+  mainWindow.on("move", scheduleSave);
   mainWindow.on("close", () => {
     void persistWindowState(mainWindow);
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
-    mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {
     mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
   }

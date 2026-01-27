@@ -83,6 +83,19 @@ export const removeImagesById = async (ids: string[]) => {
   await tx.done;
 };
 
+export const removeAlbumById = async (albumId: string) => {
+  const db = await dbPromise;
+  const tx = db.transaction(["albums", "images", "imagePrefs"], "readwrite");
+  const imageIndex = tx.objectStore("images").index("albumId");
+  const imageKeys = await imageIndex.getAllKeys(albumId);
+  for (const key of imageKeys) {
+    await tx.objectStore("images").delete(key);
+    await tx.objectStore("imagePrefs").delete(String(key));
+  }
+  await tx.objectStore("albums").delete(albumId);
+  await tx.done;
+};
+
 export const getImageViewPrefs = async (imageId: string) => {
   const db = await dbPromise;
   return db.get("imagePrefs", imageId);

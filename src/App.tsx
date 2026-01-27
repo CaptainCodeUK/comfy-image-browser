@@ -5,6 +5,7 @@ import {
   getAppPref,
   getImages,
   getImageViewPrefs,
+  removeAlbumById,
   removeImagesById,
   setAppPref,
   setImageViewPrefs,
@@ -19,6 +20,8 @@ type Tab =
   | { id: string; title: string; type: "image"; image: IndexedImage };
 
 type ZoomMode = "fit" | "actual" | "width" | "height" | "manual";
+type AlbumSort = "name-asc" | "name-desc" | "added-desc" | "added-asc";
+type ImageSort = "name-asc" | "name-desc" | "date-desc" | "date-asc" | "size-desc" | "size-asc";
 
 type MetadataValue = string | number | boolean | null | MetadataValue[] | { [key: string]: MetadataValue };
 
@@ -165,16 +168,21 @@ export default function App() {
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [lastCopied, setLastCopied] = useState<string | null>(null);
+  const [albumSort, setAlbumSort] = useState<AlbumSort>("name-asc");
+  const [imageSort, setImageSort] = useState<ImageSort>("date-desc");
+  const [selectedAlbumIds, setSelectedAlbumIds] = useState<Set<string>>(new Set());
 
   const bridgeAvailable = typeof window !== "undefined" && !!window.comfy;
 
   useEffect(() => {
     const load = async () => {
-      const [albumRows, imageRows, storedIconSize, storedAlbum] = await Promise.all([
+      const [albumRows, imageRows, storedIconSize, storedAlbum, storedAlbumSort, storedImageSort] = await Promise.all([
         getAlbums(),
         getImages(),
         getAppPref<number>("iconSize"),
         getAppPref<string>("activeAlbum"),
+        getAppPref<AlbumSort>("albumSort"),
+        getAppPref<ImageSort>("imageSort"),
       ]);
       const imagesWithUrls = await attachFileUrls(imageRows);
       setAlbums(albumRows);
@@ -182,8 +190,16 @@ export default function App() {
       if (storedIconSize) {
         setIconSize(storedIconSize);
       }
-      if (storedAlbum) {
+  if (storedAlbum && albumRows.some((album: Album) => album.id === storedAlbum)) {
         setActiveAlbum(storedAlbum as string | "all");
+      } else if (storedAlbum) {
+        setActiveAlbum("all");
+      }
+      if (storedAlbumSort) {
+        setAlbumSort(storedAlbumSort);
+      }
+      if (storedImageSort) {
+        setImageSort(storedImageSort);
       }
     };
     load();
@@ -221,13 +237,27 @@ export default function App() {
     return () => window.clearTimeout(timeout);
   }, [activeAlbum]);
 
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void setAppPref("albumSort", albumSort);
+    }, 200);
+    return () => window.clearTimeout(timeout);
+  }, [albumSort]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void setAppPref("imageSort", imageSort);
+    }, 200);
+    return () => window.clearTimeout(timeout);
+  }, [imageSort]);
+
   const albumById = useMemo(() => {
     return new Map(albums.map((album) => [album.id, album]));
   }, [albums]);
 
   const filteredImages = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return images.filter((image) => {
+    const visible = images.filter((image) => {
       if (activeAlbum !== "all" && image.albumId !== activeAlbum) {
         return false;
       }
@@ -240,7 +270,46 @@ export default function App() {
         metaString.includes(query)
       );
     });
-  }, [images, search, albumById, activeAlbum]);
+    const sorted = [...visible];
+    sorted.sort((a, b) => {
+      switch (imageSort) {
+        case "name-asc":
+          return a.fileName.localeCompare(b.fileName);
+        case "name-desc":
+          return b.fileName.localeCompare(a.fileName);
+        case "date-asc":
+          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        case "date-desc":
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        case "size-asc":
+          return a.sizeBytes - b.sizeBytes;
+        case "size-desc":
+          return b.sizeBytes - a.sizeBytes;
+        default:
+          return 0;
+      }
+    });
+    return sorted;
+  }, [images, search, albumById, activeAlbum, imageSort]);
+
+  const sortedAlbums = useMemo(() => {
+    const sorted = [...albums];
+    sorted.sort((a, b) => {
+      switch (albumSort) {
+        case "name-asc":
+          return a.name.localeCompare(b.name);
+        case "name-desc":
+          return b.name.localeCompare(a.name);
+        case "added-asc":
+          return new Date(a.addedAt).getTime() - new Date(b.addedAt).getTime();
+        case "added-desc":
+          return new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime();
+        default:
+          return 0;
+      }
+    });
+    return sorted;
+  }, [albums, albumSort]);
 
   const toggleSelection = (id: string, multi: boolean) => {
     setSelectedIds((prev) => {
@@ -319,6 +388,71 @@ export default function App() {
     setSelectedIds(new Set());
     setTabs((prev) => prev.filter((tab) => tab.type === "library" || !selectedIds.has(tab.id)));
     setActiveTab((current) => (current.type === "image" && selectedIds.has(current.id) ? LibraryTab : current));
+  };
+
+  const handleRemoveAlbum = async (albumId: string) => {
+    const albumName = albums.find((album) => album.id === albumId)?.name ?? "this album";
+    const confirmed = window.confirm(`Remove ${albumName} from the index?`);
+    if (!confirmed) return;
+    await removeAlbumById(albumId);
+    setAlbums((prev) => prev.filter((album) => album.id !== albumId));
+    setImages((prev) => prev.filter((image) => image.albumId !== albumId));
+    setTabs((prev) => prev.filter((tab) => tab.type === "library" || tab.image.albumId !== albumId));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      images.forEach((image) => {
+        if (image.albumId === albumId) {
+          next.delete(image.id);
+        }
+      });
+      return next;
+    });
+    if (activeAlbum === albumId) {
+      setActiveAlbum("all");
+    }
+    setSelectedAlbumIds((prev) => {
+      const next = new Set(prev);
+      next.delete(albumId);
+      return next;
+    });
+  };
+
+  const handleToggleAlbumSelection = (albumId: string) => {
+    setSelectedAlbumIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(albumId)) {
+        next.delete(albumId);
+      } else {
+        next.add(albumId);
+      }
+      return next;
+    });
+  };
+
+  const handleRemoveSelectedAlbums = async () => {
+    if (selectedAlbumIds.size === 0) return;
+    const confirmed = window.confirm(`Remove ${selectedAlbumIds.size} album(s) from the index?`);
+    if (!confirmed) return;
+    const ids = Array.from(selectedAlbumIds);
+    for (const id of ids) {
+      await removeAlbumById(id);
+    }
+    setAlbums((prev) => prev.filter((album) => !selectedAlbumIds.has(album.id)));
+    setImages((prev) => prev.filter((image) => !selectedAlbumIds.has(image.albumId)));
+    setTabs((prev) => prev.filter((tab) => tab.type === "library" || !selectedAlbumIds.has(tab.image.albumId)));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      images.forEach((image) => {
+        if (selectedAlbumIds.has(image.albumId)) {
+          next.delete(image.id);
+        }
+      });
+      return next;
+    });
+    if (ids.includes(activeAlbum)) {
+      setActiveAlbum("all");
+    }
+    setSelectedAlbumIds(new Set());
   };
 
   const handleAddFolder = async () => {
@@ -459,36 +593,6 @@ export default function App() {
           {toastMessage}
         </div>
       ) : null}
-      <header className="flex items-center justify-between border-b border-slate-800 bg-slate-950/80 px-6 py-4">
-        <div>
-          <h1 className="text-xl font-semibold text-white">Comfy Browser</h1>
-          <p className="text-sm text-slate-400">Browse and catalog ComfyUI generations.</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleAddFolder}
-            disabled={!bridgeAvailable || isIndexing}
-            className="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400"
-          >
-            {isIndexing ? "Indexing…" : "Add Folder"}
-          </button>
-          <button
-            onClick={() => handleOpenImages(selectedImages)}
-            disabled={selectedImages.length === 0}
-            className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-100 disabled:opacity-50"
-          >
-            Open Selected
-          </button>
-          <button
-            onClick={handleRemoveSelected}
-            disabled={selectedIds.size === 0}
-            className="rounded-lg border border-rose-400/40 px-4 py-2 text-sm text-rose-200 disabled:opacity-50"
-          >
-            Remove from Index
-          </button>
-        </div>
-      </header>
-
       {bridgeError ? (
         <div className="border-b border-amber-500/40 bg-amber-500/10 px-6 py-3 text-sm text-amber-200">
           {bridgeError}
@@ -496,34 +600,93 @@ export default function App() {
       ) : null}
 
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-64 border-r border-slate-800 bg-slate-950/50 p-4">
-          <div className="text-xs uppercase tracking-wide text-slate-400">Albums</div>
-          <button
-            onClick={() => setActiveAlbum("all")}
-            className={`mt-3 w-full rounded-lg px-3 py-2 text-left text-sm ${
-              activeAlbum === "all" ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900"
-            }`}
-          >
-            All Images
-          </button>
-          <div className="mt-2 space-y-2">
-            {albums.map((album) => (
+        <aside className="flex w-64 flex-col border-r border-slate-800 bg-slate-950/50 p-4">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-xs uppercase tracking-wide text-slate-400">Albums</div>
+              <select
+                value={albumSort}
+                onChange={(event) => setAlbumSort(event.target.value as AlbumSort)}
+                className="rounded-md border border-slate-800 bg-slate-950 px-2 py-1 text-xs text-slate-300"
+                aria-label="Sort albums"
+              >
+                <option value="name-asc">Name A → Z</option>
+                <option value="name-desc">Name Z → A</option>
+                <option value="added-desc">Newest</option>
+                <option value="added-asc">Oldest</option>
+              </select>
+            </div>
+            <div className="flex items-center justify-between">
               <button
+                onClick={handleRemoveSelectedAlbums}
+                disabled={selectedAlbumIds.size === 0}
+                className="rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-200 disabled:opacity-40"
+              >
+                Remove selected
+              </button>
+              <div className="text-[11px] text-slate-500">{selectedAlbumIds.size} selected</div>
+            </div>
+            <button
+              onClick={() => setActiveAlbum("all")}
+              className={`w-full rounded-lg px-3 py-2 text-left text-sm ${
+                activeAlbum === "all" ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900"
+              }`}
+            >
+              All Images
+            </button>
+          </div>
+          <div className="mt-3 flex-1 space-y-2 overflow-auto">
+            {sortedAlbums.map((album) => (
+              <div
                 key={album.id}
-                onClick={() => setActiveAlbum(album.id)}
-                className={`w-full rounded-lg px-3 py-2 text-left text-sm ${
+                className={`rounded-lg px-3 py-2 text-left text-sm ${
                   activeAlbum === album.id ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900"
                 }`}
               >
-                <div className="font-medium">{album.name}</div>
-                <div className="text-xs text-slate-400">{album.rootPath}</div>
-              </button>
+                <label className="flex min-w-0 cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={selectedAlbumIds.has(album.id)}
+                    onChange={() => handleToggleAlbumSelection(album.id)}
+                    className="mt-1 h-3.5 w-3.5 rounded border-slate-600 bg-slate-900"
+                    aria-label={`Select ${album.name}`}
+                  />
+                  <button
+                    onClick={() => setActiveAlbum(album.id)}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <div className="font-medium">{album.name}</div>
+                    <div className="truncate text-xs text-slate-400" title={album.rootPath}>
+                      {album.rootPath}
+                    </div>
+                  </button>
+                </label>
+              </div>
             ))}
+          </div>
+          <div className="mt-4 space-y-3 border-t border-slate-800 pt-4">
+            <button
+              onClick={handleAddFolder}
+              disabled={!bridgeAvailable || isIndexing}
+              className="w-full rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:opacity-60"
+            >
+              {isIndexing ? "Indexing…" : "Add Folder"}
+            </button>
+            <div className="flex items-center justify-between">
+              <button
+                onClick={handleRemoveSelectedAlbums}
+                disabled={selectedAlbumIds.size === 0}
+                className="rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-200 disabled:opacity-40"
+              >
+                Remove selected
+              </button>
+              <div className="text-[11px] text-slate-500">{selectedAlbumIds.size} selected</div>
+            </div>
           </div>
         </aside>
 
         <main className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex items-center gap-4 border-b border-slate-800 bg-slate-950/40 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-4 border-b border-slate-800 bg-slate-950/40 px-4 py-3">
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -541,6 +704,22 @@ export default function App() {
                 onChange={(event) => setIconSize(Number(event.target.value))}
                 aria-label="Adjust icon size"
               />
+            </div>
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <span>Sort</span>
+              <select
+                value={imageSort}
+                onChange={(event) => setImageSort(event.target.value as ImageSort)}
+                className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200"
+                aria-label="Sort images"
+              >
+                <option value="date-desc">Newest</option>
+                <option value="date-asc">Oldest</option>
+                <option value="name-asc">Name A → Z</option>
+                <option value="name-desc">Name Z → A</option>
+                <option value="size-desc">Size large → small</option>
+                <option value="size-asc">Size small → large</option>
+              </select>
             </div>
           </div>
 
