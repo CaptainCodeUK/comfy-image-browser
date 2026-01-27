@@ -30,8 +30,9 @@ declare global {
         detail?: string;
       }) => Promise<{ deletedPaths: string[]; canceled: boolean }>;
       revealInFolder: (filePath: string) => Promise<void>;
+      openInEditor: (filePath: string) => Promise<void>;
       onMenuAction: (
-        callback: (action: "add-folder" | "remove-selected-images" | "remove-selected-albums" | "delete-selected-images-disk" | "delete-selected-albums-disk" | "reveal-active-image" | "reveal-active-album") => void
+        callback: (action: "add-folder" | "remove-selected-images" | "remove-selected-albums" | "delete-selected-images-disk" | "delete-selected-albums-disk" | "reveal-active-image" | "reveal-active-album" | "edit-active-image") => void
       ) => () => void;
       onIndexingFolder: (callback: (payload: { current: number; total: number; folder: string }) => void) => () => void;
       onIndexingImage: (callback: (payload: { current: number; total: number; fileName: string }) => void) => () => void;

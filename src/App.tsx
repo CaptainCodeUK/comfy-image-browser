@@ -949,6 +949,11 @@ export default function App() {
     await window.comfy.revealInFolder(filePath);
   };
 
+  const handleOpenInEditor = async (filePath: string | undefined) => {
+    if (!bridgeAvailable || !filePath || !window.comfy?.openInEditor) return;
+    await window.comfy.openInEditor(filePath);
+  };
+
   const handleDeleteImagesFromDisk = async (ids: string[], label: string) => {
     if (!bridgeAvailable || !window.comfy?.deleteFilesFromDisk) return [];
     if (!ids.length) return [];
@@ -1027,6 +1032,9 @@ export default function App() {
     if (action === "reveal-image") {
       await handleRevealInFolder(image.filePath);
     }
+    if (action === "edit-image") {
+      await handleOpenInEditor(image.filePath);
+    }
   };
 
   const handleAlbumContextMenu = async (event: React.MouseEvent, album: Album) => {
@@ -1095,6 +1103,8 @@ export default function App() {
   useEffect(() => {
     if (!bridgeAvailable || !window.comfy?.onMenuAction) return;
     return window.comfy.onMenuAction((action) => {
+      const fallbackImage =
+        activeTab.type === "image" ? activeTab.image : images.find((image) => selectedIds.has(image.id));
       if (action === "add-folder") {
         void handleAddFolder();
         return;
@@ -1116,7 +1126,11 @@ export default function App() {
         return;
       }
       if (action === "reveal-active-image") {
-        void handleRevealInFolder(activeTab.type === "image" ? activeTab.image.filePath : undefined);
+        void handleRevealInFolder(fallbackImage?.filePath);
+        return;
+      }
+      if (action === "edit-active-image") {
+        void handleOpenInEditor(fallbackImage?.filePath);
         return;
       }
       if (action === "reveal-active-album") {
@@ -1134,6 +1148,7 @@ export default function App() {
     handleDeleteImagesFromDisk,
     handleRevealInFolder,
     selectedIds,
+    images,
     activeTab,
     activeAlbum,
     albumById,

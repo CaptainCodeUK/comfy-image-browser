@@ -166,20 +166,24 @@ const buildAppMenu = () => {
       },
       { type: "separator" },
       {
-        label: "Reveal Active Image",
+        label: "Reveal Active Image in File Manager",
         click: () => sendMenuAction("reveal-active-image"),
       },
       {
-        label: "Reveal Active Album",
+        label: "Edit Active Image in Default App",
+        click: () => sendMenuAction("edit-active-image"),
+      },
+      {
+        label: "Reveal Active Album in File Manager",
         click: () => sendMenuAction("reveal-active-album"),
       },
       { type: "separator" },
       {
-        label: "Remove Selected Images",
+        label: "Remove Selected Images from Index",
         click: () => sendMenuAction("remove-selected-images"),
       },
       {
-        label: "Remove Selected Albums",
+        label: "Remove Selected Albums from Index",
         click: () => sendMenuAction("remove-selected-albums"),
       },
       { type: "separator" },
@@ -515,6 +519,10 @@ ipcMain.handle("comfy:reveal-in-folder", async (_event: IpcMainInvokeEvent, file
   shell.showItemInFolder(filePath);
 });
 
+ipcMain.handle("comfy:open-in-editor", async (_event: IpcMainInvokeEvent, filePath: string) => {
+  await shell.openPath(filePath);
+});
+
 ipcMain.handle(
   "comfy:delete-files-from-disk",
   async (
@@ -606,6 +614,10 @@ ipcMain.handle(
         items.push({
           label: "Reveal in File Manager",
           click: () => finish("reveal-image"),
+        });
+        items.push({
+          label: "Edit in Default App",
+          click: () => finish("edit-image"),
         });
         items.push({
           label: `Remove ${payload.label} from index`,
