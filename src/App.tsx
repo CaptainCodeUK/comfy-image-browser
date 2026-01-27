@@ -163,6 +163,8 @@ export default function App() {
   const [viewerSize, setViewerSize] = useState({ width: 0, height: 0 });
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const viewerRef = useRef<HTMLDivElement | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [lastCopied, setLastCopied] = useState<string | null>(null);
 
   const bridgeAvailable = typeof window !== "undefined" && !!window.comfy;
 
@@ -427,8 +429,36 @@ export default function App() {
   const selectedImages = images.filter((image) => selectedIds.has(image.id));
   const metadataSummary = activeTab.type === "image" ? extractMetadataSummary(activeTab.image.metadataText) : null;
 
+  const copyToClipboard = async (value: string, label: string) => {
+    if (!navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setToastMessage(`${label} copied`);
+      setLastCopied(label);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
+  useEffect(() => {
+    if (!toastMessage) return;
+    const timeout = window.setTimeout(() => setToastMessage(null), 1800);
+    return () => window.clearTimeout(timeout);
+  }, [toastMessage]);
+
+  useEffect(() => {
+    if (!lastCopied) return;
+    const timeout = window.setTimeout(() => setLastCopied(null), 1200);
+    return () => window.clearTimeout(timeout);
+  }, [lastCopied]);
+
   return (
     <div className="flex h-screen flex-col">
+      {toastMessage ? (
+        <div className="pointer-events-none fixed right-6 top-6 z-50 rounded-lg bg-slate-900/90 px-4 py-2 text-xs text-slate-100 shadow-lg">
+          {toastMessage}
+        </div>
+      ) : null}
       <header className="flex items-center justify-between border-b border-slate-800 bg-slate-950/80 px-6 py-4">
         <div>
           <h1 className="text-xl font-semibold text-white">Comfy Browser</h1>
@@ -685,41 +715,91 @@ export default function App() {
                     {metadataSummary ? (
                       <div className="grid gap-2">
                         {metadataSummary.promptText ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
                             <div className="break-words text-slate-400">Prompt</div>
                             <div className="break-words text-slate-100">{metadataSummary.promptText}</div>
+                            <button
+                              onClick={() => copyToClipboard(metadataSummary.promptText ?? "", "Prompt")}
+                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${
+                                lastCopied === "Prompt"
+                                  ? "border-indigo-400 bg-indigo-500/20"
+                                  : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
+                              }`}
+                              aria-label="Copy prompt"
+                              title="Copy prompt"
+                            >
+                              ⧉
+                            </button>
                           </div>
                         ) : null}
                         {metadataSummary.width && metadataSummary.height ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
                             <div className="break-words text-slate-400">Resolution</div>
                             <div className="break-words text-slate-100">
                               {metadataSummary.width} × {metadataSummary.height}
                             </div>
+                            <div className="h-8 w-8" aria-hidden="true" />
                           </div>
                         ) : null}
                         {metadataSummary.batchSize ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
                             <div className="break-words text-slate-400">Batch size</div>
                             <div className="break-words text-slate-100">{metadataSummary.batchSize}</div>
+                            <div className="h-8 w-8" aria-hidden="true" />
                           </div>
                         ) : null}
                         {metadataSummary.checkpoint ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
                             <div className="break-words text-slate-400">Checkpoint</div>
                             <div className="break-words text-slate-100">{metadataSummary.checkpoint}</div>
+                            <button
+                              onClick={() => copyToClipboard(metadataSummary.checkpoint ?? "", "Checkpoint")}
+                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${
+                                lastCopied === "Checkpoint"
+                                  ? "border-indigo-400 bg-indigo-500/20"
+                                  : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
+                              }`}
+                              aria-label="Copy checkpoint"
+                              title="Copy checkpoint"
+                            >
+                              ⧉
+                            </button>
                           </div>
                         ) : null}
                         {metadataSummary.seed ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
                             <div className="break-words text-slate-400">Seed</div>
                             <div className="break-words text-slate-100">{metadataSummary.seed}</div>
+                            <button
+                              onClick={() => copyToClipboard(metadataSummary.seed ?? "", "Seed")}
+                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${
+                                lastCopied === "Seed"
+                                  ? "border-indigo-400 bg-indigo-500/20"
+                                  : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
+                              }`}
+                              aria-label="Copy seed"
+                              title="Copy seed"
+                            >
+                              ⧉
+                            </button>
                           </div>
                         ) : null}
                         {metadataSummary.loras.length ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
                             <div className="break-words text-slate-400">LoRAs</div>
                             <div className="break-words text-slate-100">{metadataSummary.loras.join(", ")}</div>
+                            <button
+                              onClick={() => copyToClipboard(metadataSummary.loras.join(", "), "LoRAs")}
+                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${
+                                lastCopied === "LoRAs"
+                                  ? "border-indigo-400 bg-indigo-500/20"
+                                  : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
+                              }`}
+                              aria-label="Copy LoRAs"
+                              title="Copy LoRAs"
+                            >
+                              ⧉
+                            </button>
                           </div>
                         ) : null}
                       </div>
