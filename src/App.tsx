@@ -63,23 +63,60 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
     MetadataValue
   >;
 
+  const promptNodes = parsed && typeof parsed === "object" ? Object.values(parsed) : [];
+  const workflowNodes = Array.isArray(fallback.nodes) ? fallback.nodes : [];
+  const findNodeInput = (nodes: MetadataValue[], inputKey: string) => {
+    for (const node of nodes) {
+      if (!node || typeof node !== "object") continue;
+      const inputs = (node as Record<string, MetadataValue>).inputs;
+      if (inputs && typeof inputs === "object" && inputKey in inputs) {
+        return (inputs as Record<string, MetadataValue>)[inputKey];
+      }
+      const widgets = (node as Record<string, MetadataValue>).widgets_values;
+      if (Array.isArray(widgets) && widgets.length && inputKey === "text") {
+        const maybeText = widgets.find((item) => typeof item === "string") as string | undefined;
+        if (maybeText) return maybeText;
+      }
+    }
+    return undefined;
+  };
+
   const promptText =
     pickString(parsed.prompt) ||
     pickString(parsed.positive) ||
     pickString(parsed.text) ||
+    pickString(findNodeInput(promptNodes, "text")) ||
     (typeof metadata.prompt === "string" && !parsedPrompt ? metadata.prompt : null);
 
-  const width = pickString(parsed.width) ?? pickString(fallback.width);
-  const height = pickString(parsed.height) ?? pickString(fallback.height);
-  const batchSize = pickString(parsed.batch_size) ?? pickString(parsed.batchSize) ?? pickString(fallback.batch_size);
+  const width =
+    pickString(parsed.width) ||
+    pickString(findNodeInput(promptNodes, "width")) ||
+    pickString(findNodeInput(workflowNodes, "width"));
+  const height =
+    pickString(parsed.height) ||
+    pickString(findNodeInput(promptNodes, "height")) ||
+    pickString(findNodeInput(workflowNodes, "height"));
+  const batchSize =
+    pickString(parsed.batch_size) ||
+    pickString(parsed.batchSize) ||
+    pickString(findNodeInput(promptNodes, "batch_size")) ||
+    pickString(findNodeInput(workflowNodes, "batch_size"));
   const checkpoint =
     pickString(parsed.model) ||
     pickString(parsed.checkpoint) ||
     pickString(parsed.checkpoint_name) ||
-    pickString(fallback.model);
-  const seed = pickString(parsed.seed) ?? pickString(fallback.seed);
+    pickString(findNodeInput(promptNodes, "ckpt_name")) ||
+    pickString(findNodeInput(workflowNodes, "ckpt_name"));
+  const seed =
+    pickString(parsed.seed) ||
+    pickString(findNodeInput(promptNodes, "seed")) ||
+    pickString(findNodeInput(workflowNodes, "seed"));
 
-  const loraValue = parsed.loras ?? parsed.lora ?? fallback.loras ?? fallback.lora;
+  const loraValue =
+    parsed.loras ||
+    parsed.lora ||
+    findNodeInput(promptNodes, "lora_name") ||
+    findNodeInput(workflowNodes, "lora_name");
   let loras: string[] = [];
   if (Array.isArray(loraValue)) {
     loras = loraValue.map((item) => pickString(item) ?? "").filter(Boolean);
@@ -644,64 +681,47 @@ export default function App() {
                 </div>
                 <div className="mt-6">
                   <div className="text-xs uppercase tracking-wide text-slate-400">Metadata</div>
-                  <div className="mt-2 max-h-[60vh] overflow-auto rounded-lg bg-slate-900 p-3 text-xs text-slate-300">
-                    {activeTabContent.metadataText ? (
-                      <div className="grid gap-4">
-                        {metadataSummary ? (
-                          <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-                            <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">Key details</div>
-                            <div className="grid gap-2">
-                              {metadataSummary.promptText ? (
-                                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
-                                  <div className="break-words text-slate-400">Prompt</div>
-                                  <div className="break-words text-slate-100">{metadataSummary.promptText}</div>
-                                </div>
-                              ) : null}
-                              {metadataSummary.width && metadataSummary.height ? (
-                                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
-                                  <div className="break-words text-slate-400">Resolution</div>
-                                  <div className="break-words text-slate-100">
-                                    {metadataSummary.width} × {metadataSummary.height}
-                                  </div>
-                                </div>
-                              ) : null}
-                              {metadataSummary.batchSize ? (
-                                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
-                                  <div className="break-words text-slate-400">Batch size</div>
-                                  <div className="break-words text-slate-100">{metadataSummary.batchSize}</div>
-                                </div>
-                              ) : null}
-                              {metadataSummary.checkpoint ? (
-                                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
-                                  <div className="break-words text-slate-400">Checkpoint</div>
-                                  <div className="break-words text-slate-100">{metadataSummary.checkpoint}</div>
-                                </div>
-                              ) : null}
-                              {metadataSummary.seed ? (
-                                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
-                                  <div className="break-words text-slate-400">Seed</div>
-                                  <div className="break-words text-slate-100">{metadataSummary.seed}</div>
-                                </div>
-                              ) : null}
-                              {metadataSummary.loras.length ? (
-                                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
-                                  <div className="break-words text-slate-400">LoRAs</div>
-                                  <div className="break-words text-slate-100">
-                                    {metadataSummary.loras.join(", ")}
-                                  </div>
-                                </div>
-                              ) : null}
+                  <div className="mt-2 rounded-lg bg-slate-900 p-3 text-xs text-slate-300">
+                    {metadataSummary ? (
+                      <div className="grid gap-2">
+                        {metadataSummary.promptText ? (
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
+                            <div className="break-words text-slate-400">Prompt</div>
+                            <div className="break-words text-slate-100">{metadataSummary.promptText}</div>
+                          </div>
+                        ) : null}
+                        {metadataSummary.width && metadataSummary.height ? (
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
+                            <div className="break-words text-slate-400">Resolution</div>
+                            <div className="break-words text-slate-100">
+                              {metadataSummary.width} × {metadataSummary.height}
                             </div>
                           </div>
                         ) : null}
-                        <div className="grid gap-2">
-                        {renderMetadataRows(activeTabContent.metadataText as MetadataValue).map((row) => (
-                          <div key={`${row.key}-${row.value}`} className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
-                            <div className="break-words text-slate-400">{row.key}</div>
-                            <div className="break-words text-slate-100">{row.value}</div>
+                        {metadataSummary.batchSize ? (
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
+                            <div className="break-words text-slate-400">Batch size</div>
+                            <div className="break-words text-slate-100">{metadataSummary.batchSize}</div>
                           </div>
-                        ))}
-                        </div>
+                        ) : null}
+                        {metadataSummary.checkpoint ? (
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
+                            <div className="break-words text-slate-400">Checkpoint</div>
+                            <div className="break-words text-slate-100">{metadataSummary.checkpoint}</div>
+                          </div>
+                        ) : null}
+                        {metadataSummary.seed ? (
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
+                            <div className="break-words text-slate-400">Seed</div>
+                            <div className="break-words text-slate-100">{metadataSummary.seed}</div>
+                          </div>
+                        ) : null}
+                        {metadataSummary.loras.length ? (
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
+                            <div className="break-words text-slate-400">LoRAs</div>
+                            <div className="break-words text-slate-100">{metadataSummary.loras.join(", ")}</div>
+                          </div>
+                        ) : null}
                       </div>
                     ) : (
                       <div className="text-slate-500">No metadata found for this image.</div>
