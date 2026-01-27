@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addAlbumWithImages,
+  addImagesToAlbum,
   getAlbums,
   getAppPref,
   getImages,
@@ -181,6 +182,8 @@ export default function App() {
   const [selectedAlbumIds, setSelectedAlbumIds] = useState<Set<string>>(new Set());
   const [folderProgress, setFolderProgress] = useState<ProgressState>(null);
   const [imageProgress, setImageProgress] = useState<ProgressState>(null);
+  const indexingTokenRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+  const [cancelingIndex, setCancelingIndex] = useState(false);
   const [gridMetrics, setGridMetrics] = useState({ width: 0, height: 0, scrollTop: 0 });
   const gridRef = useRef<HTMLDivElement | null>(null);
   const [thumbnailMap, setThumbnailMap] = useState<Record<string, string>>({});
@@ -707,6 +710,33 @@ export default function App() {
         void handleOpenImages(selectedImages);
         return;
       }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          handleSelectAllAlbums();
+        } else if (activeTab.type === "library") {
+          handleSelectAllImages();
+        }
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "i") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          handleInvertAlbumSelection();
+        } else if (activeTab.type === "library") {
+          handleInvertImageSelection();
+        }
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key === "Backspace") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          handleClearAlbumSelection();
+        } else if (activeTab.type === "library") {
+          handleClearImageSelection();
+        }
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
         event.preventDefault();
         handleDuplicateTab();
@@ -841,6 +871,14 @@ export default function App() {
     setActiveTab((current) => (current.id === tabId ? current : LibraryTab));
   };
 
+  const handleCycleTab = (direction: number) => {
+    if (tabs.length === 0) return;
+    const currentIndex = tabs.findIndex((tab) => tab.id === activeTab.id);
+    if (currentIndex === -1) return;
+    const nextIndex = (currentIndex + direction + tabs.length) % tabs.length;
+    setActiveTab(tabs[nextIndex]);
+  };
+
   const handleDuplicateTab = () => {
     if (activeTab.type !== "image") return;
     const baseId = activeTab.image.id;
@@ -944,6 +982,50 @@ export default function App() {
     }
   };
 
+  const handleSelectAllImages = () => {
+    if (filteredImages.length === 0) return;
+    setSelectedIds(new Set(filteredImages.map((image) => image.id)));
+  };
+
+  const handleInvertImageSelection = () => {
+    if (filteredImages.length === 0) return;
+    setSelectedIds((prev) => {
+      const next = new Set<string>();
+      filteredImages.forEach((image) => {
+        if (!prev.has(image.id)) {
+          next.add(image.id);
+        }
+      });
+      return next;
+    });
+  };
+
+  const handleClearImageSelection = () => {
+    setSelectedIds(new Set());
+  };
+
+  const handleSelectAllAlbums = () => {
+    if (albums.length === 0) return;
+    setSelectedAlbumIds(new Set(albums.map((album) => album.id)));
+  };
+
+  const handleInvertAlbumSelection = () => {
+    if (albums.length === 0) return;
+    setSelectedAlbumIds((prev) => {
+      const next = new Set<string>();
+      albums.forEach((album) => {
+        if (!prev.has(album.id)) {
+          next.add(album.id);
+        }
+      });
+      return next;
+    });
+  };
+
+  const handleClearAlbumSelection = () => {
+    setSelectedAlbumIds(new Set());
+  };
+
   const handleRevealInFolder = async (filePath: string | undefined) => {
     if (!bridgeAvailable || !filePath || !window.comfy?.revealInFolder) return;
     await window.comfy.revealInFolder(filePath);
@@ -1035,6 +1117,15 @@ export default function App() {
     if (action === "edit-image") {
       await handleOpenInEditor(image.filePath);
     }
+    if (action === "select-all-images") {
+      handleSelectAllImages();
+    }
+    if (action === "invert-image-selection") {
+      handleInvertImageSelection();
+    }
+    if (action === "clear-image-selection") {
+      handleClearImageSelection();
+    }
   };
 
   const handleAlbumContextMenu = async (event: React.MouseEvent, album: Album) => {
@@ -1050,6 +1141,9 @@ export default function App() {
     if (action === "remove-album") {
       await handleRemoveAlbum(album.id);
     }
+    if (action === "rescan-album") {
+      await handleRescanAlbums([album.id]);
+    }
     if (action === "remove-selected-albums") {
       await handleRemoveSelectedAlbums();
     }
@@ -1062,6 +1156,64 @@ export default function App() {
     if (action === "reveal-album") {
       await handleRevealInFolder(album.rootPath);
     }
+    if (action === "select-all-albums") {
+      handleSelectAllAlbums();
+    }
+    if (action === "invert-album-selection") {
+      handleInvertAlbumSelection();
+    }
+    if (action === "clear-album-selection") {
+      handleClearAlbumSelection();
+    }
+  };
+
+  const handleRescanAlbums = async (albumIds: string[]) => {
+    if (!bridgeAvailable || !window.comfy?.indexFolders) return;
+    const targets = albums.filter((album) => albumIds.includes(album.id));
+    if (targets.length === 0) return;
+    setIsIndexing(true);
+    const token = { cancelled: false };
+    indexingTokenRef.current = token;
+    setCancelingIndex(false);
+    setFolderProgress(null);
+    setImageProgress(null);
+    try {
+      const rootPaths = targets.map((album) => album.rootPath);
+      const payload = (await window.comfy.indexFolders(rootPaths)) as Array<{
+        rootPath: string;
+        images: IndexedImagePayload[];
+      }>;
+
+      if (token.cancelled || payload.length === 0) {
+        return;
+      }
+
+      const existingFilePaths = new Set(images.map((image) => image.filePath));
+      const albumByRoot = new Map(targets.map((album) => [album.rootPath, album]));
+      const newImages: IndexedImage[] = [];
+
+      for (const albumPayload of payload) {
+        const album = albumByRoot.get(albumPayload.rootPath);
+        if (!album) continue;
+        const filtered = albumPayload.images.filter((image) => !existingFilePaths.has(image.filePath));
+        if (filtered.length === 0) continue;
+        filtered.forEach((image) => existingFilePaths.add(image.filePath));
+        const added = await addImagesToAlbum(album.id, filtered);
+        newImages.push(...added);
+      }
+
+      if (newImages.length === 0) {
+        setToastMessage("No new images to add");
+        setLastCopied("No new images to add");
+        return;
+      }
+
+      const baseImages = newImages.map((image) => ({ ...image, fileUrl: image.filePath }));
+      setImages((prev) => [...prev, ...baseImages]);
+      hydrateFileUrls(baseImages);
+    } finally {
+      setIsIndexing(false);
+    }
   };
 
   const handleAddFolder = async () => {
@@ -1070,6 +1222,9 @@ export default function App() {
       return;
     }
     setIsIndexing(true);
+    const token = { cancelled: false };
+    indexingTokenRef.current = token;
+    setCancelingIndex(false);
     setFolderProgress(null);
     setImageProgress(null);
     try {
@@ -1077,13 +1232,39 @@ export default function App() {
       if (!folderPaths.length) {
         return;
       }
-      const payload = (await window.comfy.indexFolders(folderPaths)) as Array<{
+      const existingRoots = new Set(albums.map((album) => album.rootPath));
+      const uniquePaths = Array.from(new Set(folderPaths)).filter((path) => !existingRoots.has(path));
+      if (uniquePaths.length === 0) {
+        setToastMessage("Folders already indexed");
+        setLastCopied("Folders already indexed");
+        return;
+      }
+      const payload = (await window.comfy.indexFolders(uniquePaths)) as Array<{
         rootPath: string;
         images: IndexedImagePayload[];
       }>;
 
+      if (token.cancelled || payload.length === 0) {
+        return;
+      }
+
+      const existingFilePaths = new Set(images.map((image) => image.filePath));
+      const filteredPayload = payload
+        .filter((albumPayload) => !existingRoots.has(albumPayload.rootPath))
+        .map((albumPayload) => ({
+          ...albumPayload,
+          images: albumPayload.images.filter((image) => !existingFilePaths.has(image.filePath)),
+        }))
+        .filter((albumPayload) => albumPayload.images.length > 0);
+
+      if (filteredPayload.length === 0) {
+        setToastMessage("No new images to add");
+        setLastCopied("No new images to add");
+        return;
+      }
+
       const results = await Promise.all(
-        payload.map(async (albumPayload): Promise<{ album: Album; images: IndexedImage[] }> => {
+        filteredPayload.map(async (albumPayload): Promise<{ album: Album; images: IndexedImage[] }> => {
           return addAlbumWithImages(albumPayload.rootPath, albumPayload.images);
         })
       );
@@ -1098,6 +1279,19 @@ export default function App() {
     } finally {
       setIsIndexing(false);
     }
+  };
+
+  const handleCancelIndexing = async () => {
+    if (!bridgeAvailable || !window.comfy?.cancelIndexing) return;
+    if (cancelingIndex) return;
+    indexingTokenRef.current.cancelled = true;
+    setCancelingIndex(true);
+    setIsIndexing(false);
+    setFolderProgress(null);
+    setImageProgress(null);
+    await window.comfy.cancelIndexing();
+    setToastMessage("Indexing canceled");
+    setLastCopied("Indexing canceled");
   };
 
   useEffect(() => {
@@ -1115,6 +1309,34 @@ export default function App() {
       }
       if (action === "remove-selected-albums") {
         void handleRemoveSelectedAlbums();
+        return;
+      }
+      if (action === "rescan-selected-albums") {
+        void handleRescanAlbums(Array.from(selectedAlbumIds));
+        return;
+      }
+      if (action === "select-all-images") {
+        handleSelectAllImages();
+        return;
+      }
+      if (action === "invert-image-selection") {
+        handleInvertImageSelection();
+        return;
+      }
+      if (action === "clear-image-selection") {
+        handleClearImageSelection();
+        return;
+      }
+      if (action === "select-all-albums") {
+        handleSelectAllAlbums();
+        return;
+      }
+      if (action === "invert-album-selection") {
+        handleInvertAlbumSelection();
+        return;
+      }
+      if (action === "clear-album-selection") {
+        handleClearAlbumSelection();
         return;
       }
       if (action === "delete-selected-images-disk") {
@@ -1137,6 +1359,33 @@ export default function App() {
         const targetAlbum = activeTab.type === "image" ? activeTab.image.albumId : activeAlbum;
         const album = targetAlbum === "all" ? null : albumById.get(targetAlbum);
         void handleRevealInFolder(album?.rootPath);
+        return;
+      }
+      if (action === "tab-next") {
+        handleCycleTab(1);
+        return;
+      }
+      if (action === "tab-prev") {
+        handleCycleTab(-1);
+        return;
+      }
+      if (action === "tab-duplicate") {
+        handleDuplicateTab();
+        return;
+      }
+      if (action === "tab-close") {
+        if (activeTab.id !== "library") {
+          handleCloseTab(activeTab.id);
+        }
+        return;
+      }
+      if (action === "tab-close-others") {
+        handleCloseOtherTabs(activeTab.id);
+        return;
+      }
+      if (action === "tab-close-all") {
+        handleCloseAllTabs();
+        return;
       }
     });
   }, [
@@ -1152,6 +1401,8 @@ export default function App() {
     activeTab,
     activeAlbum,
     albumById,
+    selectedAlbumIds,
+    tabs,
   ]);
 
   useEffect(() => {
@@ -1160,17 +1411,22 @@ export default function App() {
     const hasActiveImage = Boolean(activeImage);
     const albumTargetId = activeTab.type === "image" ? activeTab.image.albumId : activeAlbum;
     const hasActiveAlbum = albumTargetId !== "all" && Boolean(albumById.get(albumTargetId));
+    const isLibraryTab = activeTab.type === "library";
     window.comfy.updateMenuState({
       hasActiveImage,
       hasActiveAlbum,
-      hasSelectedImages: selectedIds.size > 0,
+      hasSelectedImages: isLibraryTab && selectedIds.size > 0,
       hasSelectedAlbums: selectedAlbumIds.size > 0,
+      hasImages: isLibraryTab && filteredImages.length > 0,
+      hasAlbums: albums.length > 0,
     });
   }, [
     bridgeAvailable,
     activeTab,
     activeAlbum,
     images,
+    filteredImages,
+    albums,
     selectedIds,
     selectedAlbumIds,
     albumById,
@@ -1333,8 +1589,8 @@ export default function App() {
         </div>
       ) : null}
       {isIndexing ? (
-        <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-slate-950/70">
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/90 px-6 py-4 text-sm text-slate-100 shadow-xl">
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/70">
+          <div className="pointer-events-auto rounded-2xl border border-slate-800 bg-slate-950/90 px-6 py-4 text-sm text-slate-100 shadow-xl">
             <div className="flex items-center gap-3 h-full">
               <div className="h-3 w-3 animate-pulse rounded-full bg-indigo-400" />
               <span>Indexing images… this may take a moment.</span>
@@ -1371,6 +1627,16 @@ export default function App() {
                     {imageProgress.label}
                   </div>
                 ) : null}
+              </div>
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleCancelIndexing}
+                  disabled={cancelingIndex}
+                  className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-60"
+                >
+                  {cancelingIndex ? "Canceling…" : "Cancel"}
+                </button>
               </div>
             </div>
           </div>

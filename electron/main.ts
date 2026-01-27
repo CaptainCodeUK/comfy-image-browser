@@ -26,6 +26,7 @@ const THUMBNAIL_QUEUE_DELAY_MS = 10;
 const thumbnailQueue: string[] = [];
 const thumbnailInFlight = new Set<string>();
 let thumbnailQueueRunning = false;
+const indexingCancels = new Map<number, { cancelled: boolean }>();
 
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_NAME);
@@ -173,6 +174,66 @@ const buildAppMenu = () => {
         click: () => sendMenuAction("add-folder"),
       },
       { type: "separator" },
+      process.platform === "darwin" ? { role: "close" } : { role: "quit" },
+    ],
+  });
+
+  template.push({
+    label: "Album",
+    submenu: [
+      {
+        id: "menu-reveal-active-album",
+        label: "Reveal Active Album in File Manager",
+        enabled: false,
+        click: () => sendMenuAction("reveal-active-album"),
+      },
+      {
+        id: "menu-rescan-selected-albums",
+        label: "Rescan Selected Albums",
+        enabled: false,
+        click: () => sendMenuAction("rescan-selected-albums"),
+      },
+      { type: "separator" },
+      {
+        id: "menu-remove-selected-albums",
+        label: "Remove Selected Albums from Index",
+        enabled: false,
+        click: () => sendMenuAction("remove-selected-albums"),
+      },
+      {
+        id: "menu-delete-selected-albums-disk",
+        label: "Delete Selected Albums from Disk…",
+        enabled: false,
+        click: () => sendMenuAction("delete-selected-albums-disk"),
+      },
+      { type: "separator" },
+      {
+        id: "menu-select-all-albums",
+        label: "Select All Albums",
+        enabled: false,
+        accelerator: "CmdOrCtrl+Shift+A",
+        click: () => sendMenuAction("select-all-albums"),
+      },
+      {
+        id: "menu-invert-album-selection",
+        label: "Invert Album Selection",
+        enabled: false,
+        accelerator: "CmdOrCtrl+Shift+I",
+        click: () => sendMenuAction("invert-album-selection"),
+      },
+      {
+        id: "menu-clear-album-selection",
+        label: "Clear Album Selection",
+        enabled: false,
+        accelerator: "CmdOrCtrl+Shift+Backspace",
+        click: () => sendMenuAction("clear-album-selection"),
+      },
+    ],
+  });
+
+  template.push({
+    label: "Image",
+    submenu: [
       {
         id: "menu-reveal-active-image",
         label: "Reveal Active Image in File Manager",
@@ -185,12 +246,6 @@ const buildAppMenu = () => {
         enabled: false,
         click: () => sendMenuAction("edit-active-image"),
       },
-      {
-        id: "menu-reveal-active-album",
-        label: "Reveal Active Album in File Manager",
-        enabled: false,
-        click: () => sendMenuAction("reveal-active-album"),
-      },
       { type: "separator" },
       {
         id: "menu-remove-selected-images",
@@ -199,26 +254,70 @@ const buildAppMenu = () => {
         click: () => sendMenuAction("remove-selected-images"),
       },
       {
-        id: "menu-remove-selected-albums",
-        label: "Remove Selected Albums from Index",
-        enabled: false,
-        click: () => sendMenuAction("remove-selected-albums"),
-      },
-      { type: "separator" },
-      {
         id: "menu-delete-selected-images-disk",
         label: "Delete Selected Images from Disk…",
         enabled: false,
         click: () => sendMenuAction("delete-selected-images-disk"),
       },
+      { type: "separator" },
       {
-        id: "menu-delete-selected-albums-disk",
-        label: "Delete Selected Albums from Disk…",
+        id: "menu-select-all-images",
+        label: "Select All Images",
         enabled: false,
-        click: () => sendMenuAction("delete-selected-albums-disk"),
+        accelerator: "CmdOrCtrl+A",
+        click: () => sendMenuAction("select-all-images"),
+      },
+      {
+        id: "menu-invert-image-selection",
+        label: "Invert Image Selection",
+        enabled: false,
+        accelerator: "CmdOrCtrl+I",
+        click: () => sendMenuAction("invert-image-selection"),
+      },
+      {
+        id: "menu-clear-image-selection",
+        label: "Clear Image Selection",
+        enabled: false,
+        accelerator: "CmdOrCtrl+Backspace",
+        click: () => sendMenuAction("clear-image-selection"),
+      },
+    ],
+  });
+
+  template.push({
+    label: "Tab",
+    submenu: [
+      {
+        label: "Next Tab",
+        accelerator: "Ctrl+Tab",
+        click: () => sendMenuAction("tab-next"),
+      },
+      {
+        label: "Previous Tab",
+        accelerator: "Ctrl+Shift+Tab",
+        click: () => sendMenuAction("tab-prev"),
       },
       { type: "separator" },
-      process.platform === "darwin" ? { role: "close" } : { role: "quit" },
+      {
+        label: "Duplicate Tab",
+        accelerator: "CmdOrCtrl+D",
+        click: () => sendMenuAction("tab-duplicate"),
+      },
+      {
+        label: "Close Tab",
+        accelerator: "CmdOrCtrl+W",
+        click: () => sendMenuAction("tab-close"),
+      },
+      {
+        label: "Close Other Tabs",
+        accelerator: "CmdOrCtrl+Shift+W",
+        click: () => sendMenuAction("tab-close-others"),
+      },
+      {
+        label: "Close All Tabs",
+        accelerator: "CmdOrCtrl+Alt+W",
+        click: () => sendMenuAction("tab-close-all"),
+      },
     ],
   });
 
@@ -397,6 +496,8 @@ ipcMain.handle("comfy:select-folders", async () => {
 });
 
 ipcMain.handle("comfy:index-folders", async (_event: IpcMainInvokeEvent, rootPaths: string[]) => {
+  const cancelToken = { cancelled: false };
+  indexingCancels.set(_event.sender.id, cancelToken);
   const albums: Array<{ rootPath: string; images: IndexedImagePayload[] }> = [];
   const scans = await Promise.all(rootPaths.map((rootPath) => scanFolderTree(rootPath)));
   const albumFolders: Array<{ rootPath: string; folderPath: string; files: string[] }> = [];
@@ -427,6 +528,11 @@ ipcMain.handle("comfy:index-folders", async (_event: IpcMainInvokeEvent, rootPat
   let imageIndex = 0;
 
   for (const albumFolder of albumFolders) {
+    if (cancelToken.cancelled) {
+      _event.sender.send("comfy:indexing-complete");
+      indexingCancels.delete(_event.sender.id);
+      return [];
+    }
     folderIndex += 1;
     _event.sender.send("comfy:indexing-folder", {
       current: folderIndex,
@@ -436,6 +542,11 @@ ipcMain.handle("comfy:index-folders", async (_event: IpcMainInvokeEvent, rootPat
 
     const images: IndexedImagePayload[] = [];
     for (const filePath of albumFolder.files) {
+      if (cancelToken.cancelled) {
+        _event.sender.send("comfy:indexing-complete");
+        indexingCancels.delete(_event.sender.id);
+        return [];
+      }
       imageIndex += 1;
       _event.sender.send("comfy:indexing-image", {
         current: imageIndex,
@@ -449,7 +560,15 @@ ipcMain.handle("comfy:index-folders", async (_event: IpcMainInvokeEvent, rootPat
   }
 
   _event.sender.send("comfy:indexing-complete");
+  indexingCancels.delete(_event.sender.id);
   return albums;
+});
+
+ipcMain.handle("comfy:cancel-indexing", (event) => {
+  const token = indexingCancels.get(event.sender.id);
+  if (token) {
+    token.cancelled = true;
+  }
 });
 
 ipcMain.handle("comfy:to-file-url", async (_event: IpcMainInvokeEvent, filePath: string) => {
@@ -547,7 +666,17 @@ ipcMain.handle("comfy:open-in-editor", async (_event: IpcMainInvokeEvent, filePa
 
 ipcMain.on(
   "comfy:update-menu-state",
-  (_event, state: { hasActiveImage: boolean; hasActiveAlbum: boolean; hasSelectedImages: boolean; hasSelectedAlbums: boolean }) => {
+  (
+    _event,
+    state: {
+      hasActiveImage: boolean;
+      hasActiveAlbum: boolean;
+      hasSelectedImages: boolean;
+      hasSelectedAlbums: boolean;
+      hasImages: boolean;
+      hasAlbums: boolean;
+    }
+  ) => {
     updateMenuItemEnabled("menu-reveal-active-image", state.hasActiveImage);
     updateMenuItemEnabled("menu-edit-active-image", state.hasActiveImage);
     updateMenuItemEnabled("menu-reveal-active-album", state.hasActiveAlbum);
@@ -555,6 +684,13 @@ ipcMain.on(
     updateMenuItemEnabled("menu-delete-selected-images-disk", state.hasSelectedImages);
     updateMenuItemEnabled("menu-remove-selected-albums", state.hasSelectedAlbums);
     updateMenuItemEnabled("menu-delete-selected-albums-disk", state.hasSelectedAlbums);
+    updateMenuItemEnabled("menu-rescan-selected-albums", state.hasSelectedAlbums);
+    updateMenuItemEnabled("menu-select-all-images", state.hasImages);
+    updateMenuItemEnabled("menu-invert-image-selection", state.hasImages);
+    updateMenuItemEnabled("menu-clear-image-selection", state.hasSelectedImages);
+    updateMenuItemEnabled("menu-select-all-albums", state.hasAlbums);
+    updateMenuItemEnabled("menu-invert-album-selection", state.hasAlbums);
+    updateMenuItemEnabled("menu-clear-album-selection", state.hasSelectedAlbums);
   }
 );
 
@@ -672,12 +808,29 @@ ipcMain.handle(
             click: () => finish("delete-selected-images-disk"),
           });
         }
+        items.push({ type: "separator" });
+        items.push({
+          label: "Select All Images",
+          click: () => finish("select-all-images"),
+        });
+        items.push({
+          label: "Invert Image Selection",
+          click: () => finish("invert-image-selection"),
+        });
+        items.push({
+          label: "Clear Image Selection",
+          click: () => finish("clear-image-selection"),
+        });
       }
 
       if (payload.type === "album") {
         items.push({
           label: "Reveal in File Manager",
           click: () => finish("reveal-album"),
+        });
+        items.push({
+          label: "Rescan Album",
+          click: () => finish("rescan-album"),
         });
         items.push({
           label: `Remove ${payload.label} from index`,
@@ -697,6 +850,19 @@ ipcMain.handle(
             click: () => finish("delete-selected-albums-disk"),
           });
         }
+        items.push({ type: "separator" });
+        items.push({
+          label: "Select All Albums",
+          click: () => finish("select-all-albums"),
+        });
+        items.push({
+          label: "Invert Album Selection",
+          click: () => finish("invert-album-selection"),
+        });
+        items.push({
+          label: "Clear Album Selection",
+          click: () => finish("clear-album-selection"),
+        });
       }
 
       if (items.length === 0) {

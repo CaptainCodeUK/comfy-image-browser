@@ -63,6 +63,33 @@ export const addAlbumWithImages = async (rootPath: string, payloads: IndexedImag
   return { album, images };
 };
 
+export const addImagesToAlbum = async (albumId: string, payloads: IndexedImagePayload[]) => {
+  const images: IndexedImage[] = payloads.map((payload) => ({
+    id: crypto.randomUUID(),
+    albumId,
+    filePath: payload.filePath,
+    fileName: payload.fileName,
+    fileUrl: payload.filePath,
+    sizeBytes: payload.sizeBytes,
+    createdAt: payload.createdAt,
+    width: payload.width,
+    height: payload.height,
+    metadataText: payload.metadataText,
+  }));
+
+  if (images.length === 0) return [] as IndexedImage[];
+
+  const db = await dbPromise;
+  const tx = db.transaction(["images"], "readwrite");
+  const imageStore = tx.objectStore("images");
+  for (const image of images) {
+    await imageStore.put(image);
+  }
+  await tx.done;
+
+  return images;
+};
+
 export const getAlbums = async () => {
   const db = await dbPromise;
   return db.getAll("albums");

@@ -5,6 +5,7 @@ declare global {
     comfy: {
       selectFolders: () => Promise<string[]>;
       indexFolders: (paths: string[]) => Promise<Array<{ rootPath: string; images: IndexedImagePayload[] }>>;
+  cancelIndexing: () => Promise<void>;
       toFileUrl: (filePath: string) => Promise<string>;
       getThumbnail: (filePath: string) => Promise<string | null>;
       showContextMenu: (
@@ -22,6 +23,13 @@ declare global {
         | "delete-selected-albums-disk"
         | "reveal-image"
         | "reveal-album"
+        | "rescan-album"
+        | "select-all-images"
+        | "invert-image-selection"
+        | "clear-image-selection"
+        | "select-all-albums"
+        | "invert-album-selection"
+        | "clear-album-selection"
         | null
       >;
       deleteFilesFromDisk: (payload: {
@@ -36,9 +44,11 @@ declare global {
         hasActiveAlbum: boolean;
         hasSelectedImages: boolean;
         hasSelectedAlbums: boolean;
+        hasImages: boolean;
+        hasAlbums: boolean;
       }) => void;
       onMenuAction: (
-        callback: (action: "add-folder" | "remove-selected-images" | "remove-selected-albums" | "delete-selected-images-disk" | "delete-selected-albums-disk" | "reveal-active-image" | "reveal-active-album" | "edit-active-image") => void
+        callback: (action: "add-folder" | "remove-selected-images" | "remove-selected-albums" | "delete-selected-images-disk" | "delete-selected-albums-disk" | "reveal-active-image" | "reveal-active-album" | "edit-active-image" | "rescan-selected-albums" | "select-all-images" | "invert-image-selection" | "clear-image-selection" | "select-all-albums" | "invert-album-selection" | "clear-album-selection" | "tab-next" | "tab-prev" | "tab-duplicate" | "tab-close" | "tab-close-others" | "tab-close-all") => void
       ) => () => void;
       onIndexingFolder: (callback: (payload: { current: number; total: number; folder: string }) => void) => () => void;
       onIndexingImage: (callback: (payload: { current: number; total: number; fileName: string }) => void) => () => void;
