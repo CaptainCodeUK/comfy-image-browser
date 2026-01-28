@@ -2188,7 +2188,7 @@ export default function App() {
           <div className="pointer-events-auto w-full max-w-md rounded-2xl border border-slate-800 bg-slate-950/90 px-6 py-5 text-sm text-slate-100 shadow-xl">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-lg font-semibold">{appInfo?.name ?? "Comfy Browser"}</div>
+                <div className="text-lg font-semibold">{appInfo?.name ?? "Comfy Image Browser"}</div>
                 <div className="mt-1 text-xs text-slate-400">Version {appInfo?.version ?? "—"}</div>
               </div>
               <button
@@ -2200,7 +2200,7 @@ export default function App() {
               </button>
             </div>
             <div className="mt-4 space-y-2 text-sm text-slate-300">
-              <p>Thanks for using Comfy Browser! If you’d like to support development, consider buying me a cup of coffee, over on Ko‑Fi.</p>
+              <p>Thanks for using Comfy Image Browser! If you’d like to support development, consider buying me a cup of coffee, over on Ko‑Fi.</p>
               <button
                 type="button"
                 onClick={() => window.comfy?.openExternal("https://ko-fi.com/captaincodeuk")}

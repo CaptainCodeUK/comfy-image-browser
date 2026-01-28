@@ -1,5 +1,6 @@
 {
   "name": "comfy-browser",
+  "productName": "Comfy Image Browser",
   "private": true,
   "version": "0.1.0",
   "main": "electron-dist/electron/main.js",

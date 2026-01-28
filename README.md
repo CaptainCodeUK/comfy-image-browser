@@ -1,6 +1,6 @@
-# Comfy Browser
+# Comfy Image Browser
 
-Comfy Browser is a desktop image viewer and cataloger, with some special features for images generated using [ComfyUI](https://www.comfy.org/). Point it at your image folders, index ComfyUI PNG metadata into a local IndexedDB database, and browse everything in a fast, searchable grid with a tabbed viewer.
+Comfy Image Browser is a desktop image viewer and cataloger, with some special features for images generated using [ComfyUI](https://www.comfy.org/). Point it at your image folders, index ComfyUI PNG metadata into a local IndexedDB database, and browse everything in a fast, searchable grid with a tabbed viewer.
 
 ## Feature highlights
 
@@ -22,7 +22,7 @@ All metadata lives in your local IndexedDB database. Images are never uploaded a
 Pre-built binaries are published on the GitHub Releases page for this repository. Download the version that matches your OS and run it directly.
 
 ## Keyboard Shortcuts
-### Tab management
+#### Tab management
 
 - **Ctrl/Cmd + D**: Duplicate active tab.
 - **Ctrl/Cmd + W**: Close active tab.
@@ -30,7 +30,7 @@ Pre-built binaries are published on the GitHub Releases page for this repository
 - **Ctrl/Cmd + Alt + W**: Close all tabs.
 - **Ctrl + Tab / Ctrl + Shift + Tab**: Cycle tabs (next/previous).
 
-### Image and Album Management
+#### Image and Album Management
 - **Ctrl/Cmd + B**: Toggle favourite for the active image or a single selected image.
 - **F2**: Rename selected image.
 - **Shift+F2**: Rename selected album.

@@ -19,6 +19,7 @@ const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 const COMFY_PROTOCOL = "comfy";
 const WINDOW_STATE_FILE = "window-state.json";
 const APP_NAME = "comfy-browser";
+const APP_DISPLAY_NAME = "Comfy Image Browser";
 const THUMBNAIL_DIR = ".thumbs";
 const THUMBNAIL_SIZE = 320;
 const THUMBNAIL_QUEUE_DELAY_MS = 10;
@@ -361,7 +362,8 @@ const buildAppMenu = () => {
         label: "Help",
         submenu: [
             {
-                label: "About Comfy Browser",
+                label: "About Comfy Image Browser",
+                accelerator: "F1",
                 click: () => sendMenuAction("show-about"),
             },
         ],
@@ -716,7 +718,7 @@ ipcMain.handle("comfy:open-in-editor", async (_event: IpcMainInvokeEvent, filePa
 
 ipcMain.handle("comfy:get-app-info", () => {
     return {
-        name: app.getName(),
+        name: APP_DISPLAY_NAME,
         version: app.getVersion(),
     };
 });
