@@ -125,19 +125,65 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
     pickString(findNodeInput(promptNodes, "seed")) ||
     pickString(findNodeInput(workflowNodes, "seed"));
 
-  const loraValue =
-    parsed.loras ||
-    parsed.lora ||
-    findNodeInput(promptNodes, "lora_name") ||
-    findNodeInput(workflowNodes, "lora_name");
-  let loras: string[] = [];
-  if (Array.isArray(loraValue)) {
-    loras = loraValue.map((item) => pickString(item) ?? "").filter(Boolean);
-  } else if (typeof loraValue === "string") {
-    loras = loraValue.split(",").map((entry) => entry.trim()).filter(Boolean);
-  } else if (loraValue && typeof loraValue === "object") {
-    loras = Object.keys(loraValue).filter(Boolean);
-  }
+  const loraValues = [
+    parsed.loras,
+    parsed.lora,
+    findNodeInput(promptNodes, "lora_name"),
+    findNodeInput(workflowNodes, "lora_name"),
+  ];
+  const loras: string[] = [];
+  const pushLora = (value: MetadataValue | undefined | null) => {
+    if (!value) return;
+    if (typeof value === "string") {
+      value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .forEach((entry) => loras.push(entry));
+      return;
+    }
+    if (typeof value === "number") {
+      loras.push(String(value));
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => pushLora(item));
+      return;
+    }
+    if (typeof value === "object") {
+      const record = value as Record<string, MetadataValue>;
+      const named =
+        pickString(record.lora_name) ||
+        pickString(record.lora) ||
+        pickString(record.name) ||
+        pickString(record.model);
+      if (named) {
+        loras.push(named);
+      }
+      Object.values(record).forEach((entry) => pushLora(entry));
+    }
+  };
+  const collectLoras = (value: MetadataValue | undefined | null) => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach((entry) => collectLoras(entry));
+      return;
+    }
+    if (typeof value === "object") {
+      const record = value as Record<string, MetadataValue>;
+      Object.entries(record).forEach(([key, entry]) => {
+        if (key === "lora_name" || key === "lora" || key === "loraName") {
+          pushLora(entry);
+        }
+        collectLoras(entry);
+      });
+    }
+  };
+
+  loraValues.forEach((value) => pushLora(value));
+  collectLoras(parsedPrompt as MetadataValue);
+  collectLoras(parsedWorkflow as MetadataValue);
+  const uniqueLoras = Array.from(new Set(loras.filter(Boolean)));
 
   return {
     promptText,
@@ -146,7 +192,7 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
     batchSize,
     checkpoint,
     seed,
-    loras,
+    loras: uniqueLoras,
   };
 };
 
@@ -3011,7 +3057,26 @@ export default function App() {
                   ) : null}
                 </div>
                 <div className="mt-6">
-                  <div className="text-xs uppercase tracking-wide text-slate-400">Metadata</div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs uppercase tracking-wide text-slate-400">Metadata</div>
+                    <button
+                      onClick={() =>
+                        copyToClipboard(
+                          JSON.stringify(activeTabContent?.metadataText ?? {}, null, 2),
+                          "Decoded metadata"
+                        )
+                      }
+                      className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${
+                        lastCopied === "Decoded metadata"
+                          ? "border-indigo-400 bg-indigo-500/20"
+                          : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
+                      }`}
+                      aria-label="Copy decoded metadata"
+                      title="Copy decoded metadata"
+                    >
+                      ⧉ Copy
+                    </button>
+                  </div>
                   <div className="mt-2 rounded-lg bg-slate-900 p-3 text-xs text-slate-300">
                     {metadataSummary ? (
                       <div className="grid gap-2">
@@ -3086,21 +3151,27 @@ export default function App() {
                           </div>
                         ) : null}
                         {metadataSummary.loras.length ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
-                            <div className="break-words text-slate-400">LoRAs</div>
-                            <div className="break-words text-slate-100">{metadataSummary.loras.join(", ")}</div>
-                            <button
-                              onClick={() => copyToClipboard(metadataSummary.loras.join(", "), "LoRAs")}
-                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${
-                                lastCopied === "LoRAs"
-                                  ? "border-indigo-400 bg-indigo-500/20"
-                                  : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
-                              }`}
-                              aria-label="Copy LoRAs"
-                              title="Copy LoRAs"
-                            >
-                              ⧉
-                            </button>
+                          <div className="space-y-2">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">LoRAs</div>
+                            <ul className="space-y-2 text-slate-100">
+                              {metadataSummary.loras.map((lora) => (
+                                <li key={lora} className="flex items-start gap-3">
+                                  <span className="min-w-0 flex-1 break-words">• {lora}</span>
+                                  <button
+                                    onClick={() => copyToClipboard(lora, `LoRA: ${lora}`)}
+                                    className={`shrink-0 rounded-[10px] border px-2 py-1 text-xs text-slate-200 transition ${
+                                      lastCopied === `LoRA: ${lora}`
+                                        ? "border-indigo-400 bg-indigo-500/20"
+                                        : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
+                                    }`}
+                                    aria-label={`Copy LoRA ${lora}`}
+                                    title={`Copy ${lora}`}
+                                  >
+                                    ⧉
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
                           </div>
                         ) : null}
                       </div>
