@@ -202,6 +202,7 @@ export default function App() {
   const [renameState, setRenameState] = useState<RenameState>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [appInfo, setAppInfo] = useState<{ name: string; version: string } | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const renameCancelRef = useRef(false);
   const renameTargetRef = useRef<string | null>(null);
@@ -350,7 +351,7 @@ export default function App() {
     return sorted;
   }, [images, search, albumById, activeAlbum, imageSort, favoriteIds]);
 
-  const selectedImages = images.filter((image) => selectedIds.has(image.id));
+  const selectedImages = filteredImages.filter((image) => selectedIds.has(image.id));
 
   const albumIdForNav =
     activeTab.type === "image"
@@ -391,6 +392,13 @@ export default function App() {
     });
     return sorted;
   }, [images, albumIdForNav, imageSort, favoriteIds, activeAlbum]);
+
+  const navigationImages = useMemo(() => {
+    if (activeTab.type === "image" && search.trim()) {
+      return filteredImages;
+    }
+    return albumSortedImages;
+  }, [activeTab.type, search, filteredImages, albumSortedImages]);
 
   const gridColumnCount = useMemo(() => {
     if (!gridMetrics.width) return 1;
@@ -439,6 +447,20 @@ export default function App() {
     if (focusedIndex === null) return;
     scrollToIndex(focusedIndex);
   }, [focusedIndex, scrollToIndex]);
+
+  useEffect(() => {
+    const visibleIds = new Set(filteredImages.map((image) => image.id));
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set(Array.from(prev).filter((id) => visibleIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+    setFocusedIndex((prev) => {
+      if (prev === null) return prev;
+      if (filteredImages.length === 0) return null;
+      return Math.min(prev, filteredImages.length - 1);
+    });
+  }, [filteredImages]);
 
   const sortedAlbums = useMemo(() => {
     const sorted = [...albums];
@@ -804,6 +826,24 @@ export default function App() {
         void handleOpenImages(selectedImages);
         return;
       }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        const input = searchInputRef.current;
+        if (input) {
+          input.focus();
+          input.select();
+        }
+        return;
+      }
+      if (event.key === "F3") {
+        event.preventDefault();
+        const input = searchInputRef.current;
+        if (input) {
+          input.focus();
+          input.select();
+        }
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
         event.preventDefault();
         const target =
@@ -938,13 +978,13 @@ export default function App() {
 
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         const currentImageId = activeTab.image.id;
-        const currentIndex = albumSortedImages.findIndex((image) => image.id === currentImageId);
+        const currentIndex = navigationImages.findIndex((image) => image.id === currentImageId);
         if (currentIndex === -1) return;
         const delta = event.key === "ArrowLeft" ? -1 : 1;
-        const total = albumSortedImages.length;
+        const total = navigationImages.length;
         const nextIndex = (currentIndex + delta + total) % total;
         event.preventDefault();
-        void handleNavigateImage(albumSortedImages[nextIndex]);
+        void handleNavigateImage(navigationImages[nextIndex]);
       }
     };
 
@@ -952,7 +992,8 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [
     activeTab,
-    albumSortedImages,
+  albumSortedImages,
+  navigationImages,
     albums,
     albumById,
     activeAlbum,
@@ -966,6 +1007,7 @@ export default function App() {
     startRenameImage,
     startRenameAlbum,
   toggleFavoriteImage,
+  searchInputRef,
     selectionAnchor,
     getRangeIds,
     tabs,
@@ -2355,13 +2397,27 @@ export default function App() {
 
         <main className="flex flex-1 flex-col overflow-hidden">
           <div className="flex flex-wrap items-center gap-4 border-b border-slate-800 bg-slate-950/40 px-4 py-3">
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search by filename, album, or metadata…"
-              aria-label="Search images"
-              className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-            />
+            <div className="relative flex-1">
+              <input
+                ref={searchInputRef}
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                onFocus={(event) => event.currentTarget.select()}
+                placeholder="Search by filename, album, or metadata…"
+                aria-label="Search images"
+                className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 pr-8 text-sm text-slate-100"
+              />
+              {search ? (
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-slate-400 hover:text-slate-200"
+                  aria-label="Clear search"
+                >
+                  ×
+                </button>
+              ) : null}
+            </div>
             <button
               onClick={() => handleOpenImages(selectedImages)}
               disabled={selectedImages.length === 0}
