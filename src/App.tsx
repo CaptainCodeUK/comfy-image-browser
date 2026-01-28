@@ -10,6 +10,8 @@ import {
   removeImagesById,
   setAppPref,
   setImageViewPrefs,
+  updateAlbumInfo,
+  updateImageFileInfo,
 } from "./lib/db";
 import type { Album, IndexedImage, IndexedImagePayload } from "./lib/types";
 
@@ -28,6 +30,7 @@ type ZoomMode = "fit" | "actual" | "width" | "height" | "manual";
 type AlbumSort = "name-asc" | "name-desc" | "added-desc" | "added-asc";
 type ImageSort = "name-asc" | "name-desc" | "date-desc" | "date-asc" | "size-desc" | "size-asc";
 type ProgressState = { current: number; total: number; label: string } | null;
+type RenameState = { type: "image" | "album"; id: string; value: string } | null;
 
 type MetadataValue = string | number | boolean | null | MetadataValue[] | { [key: string]: MetadataValue };
 
@@ -191,6 +194,10 @@ export default function App() {
   const [loadedThumbs, setLoadedThumbs] = useState<Set<string>>(new Set());
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
   const [selectionAnchor, setSelectionAnchor] = useState<number | null>(null);
+  const [renameState, setRenameState] = useState<RenameState>(null);
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const renameCancelRef = useRef(false);
+  const renameTargetRef = useRef<string | null>(null);
   const thumbnailMapRef = useRef<Record<string, string>>({});
   const thumbnailPendingRef = useRef<Set<string>>(new Set());
   const thumbnailRetryRef = useRef<number | null>(null);
@@ -201,6 +208,30 @@ export default function App() {
   useEffect(() => {
     console.log("[comfy-browser] UI mounted");
   }, []);
+
+  useEffect(() => {
+    if (!renameState) {
+      renameTargetRef.current = null;
+      return;
+    }
+    const targetKey = `${renameState.type}:${renameState.id}`;
+    if (renameTargetRef.current === targetKey) return;
+    renameTargetRef.current = targetKey;
+    requestAnimationFrame(() => {
+      renameInputRef.current?.focus();
+      const input = renameInputRef.current;
+      if (!input) return;
+      if (renameState.type === "image") {
+        const value = input.value;
+        const dotIndex = value.lastIndexOf(".");
+        if (dotIndex > 0) {
+          input.setSelectionRange(0, dotIndex);
+          return;
+        }
+      }
+      input.select();
+    });
+  }, [renameState]);
 
   useEffect(() => {
     document.documentElement.style.setProperty("--icon-size", `${iconSize}px`);
@@ -303,6 +334,8 @@ export default function App() {
     }
     return sorted;
   }, [images, search, albumById, activeAlbum, imageSort]);
+
+  const selectedImages = images.filter((image) => selectedIds.has(image.id));
 
   const albumIdForNav = activeTab.type === "image" ? activeTab.image.albumId : activeAlbum;
   const albumHighlightId = albumIdForNav;
@@ -706,6 +739,31 @@ export default function App() {
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
         return;
       }
+      if (event.key === "F2") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          const albumTarget =
+            selectedAlbumIds.size === 1
+              ? albums.find((album) => selectedAlbumIds.has(album.id))
+              : activeAlbum !== "all"
+              ? albumById.get(activeAlbum) ?? null
+              : null;
+          if (albumTarget) {
+            startRenameAlbum(albumTarget);
+          }
+        } else {
+          const imageTarget =
+            activeTab.type === "image"
+              ? activeTab.image
+              : selectedIds.size === 1
+              ? images.find((image) => selectedIds.has(image.id))
+              : null;
+          if (imageTarget) {
+            startRenameImage(imageTarget);
+          }
+        }
+        return;
+      }
       if (event.key === "Enter" && activeTab.type === "library" && selectedIds.size > 0) {
         event.preventDefault();
         void handleOpenImages(selectedImages);
@@ -842,10 +900,18 @@ export default function App() {
   }, [
     activeTab,
     albumSortedImages,
+    albums,
+    albumById,
+    activeAlbum,
     filteredImages,
     focusedIndex,
     gridColumnCount,
     handleNavigateImage,
+    selectedIds,
+    selectedAlbumIds,
+    selectedImages,
+    startRenameImage,
+    startRenameAlbum,
     selectionAnchor,
     getRangeIds,
     tabs,
@@ -946,6 +1012,154 @@ export default function App() {
     setTabs((prev) => prev.filter((tab) => tab.type === "library" || !idSet.has(tab.id)));
     setActiveTab((current) => (current.type === "image" && idSet.has(current.id) ? LibraryTab : current));
   };
+
+  function startRenameImage(image: IndexedImage) {
+    setRenameState({ type: "image", id: image.id, value: image.fileName });
+  }
+
+  function startRenameAlbum(album: Album) {
+    setRenameState({ type: "album", id: album.id, value: album.name });
+  }
+
+  function cancelRename() {
+    setRenameState(null);
+  }
+
+  async function commitRename() {
+    if (!renameState) return;
+    const current = renameState;
+    const trimmed = current.value.trim();
+    if (!trimmed) {
+      setRenameState(null);
+      return;
+    }
+    if (trimmed.includes("/") || trimmed.includes("\\")) {
+      setToastMessage("Name cannot include path separators");
+      setLastCopied("Name cannot include path separators");
+      return;
+    }
+    if (current.type === "image") {
+      const image = images.find((entry) => entry.id === current.id);
+      if (!image || !window.comfy?.renamePath) {
+        setRenameState(null);
+        return;
+      }
+      const originalExtension = getFileExtension(image.fileName);
+      const nextExtension = getFileExtension(trimmed);
+      const fileName = nextExtension ? trimmed : `${trimmed}${originalExtension}`;
+      if (fileName === image.fileName) {
+        setRenameState(null);
+        return;
+      }
+      const parentPath = getParentPath(image.filePath);
+      const newPath = joinPath(parentPath, fileName);
+      const result = await window.comfy.renamePath({ oldPath: image.filePath, newPath, kind: "file" });
+      if (!result?.success) {
+        setToastMessage(result?.message ?? "Failed to rename image");
+        setLastCopied(result?.message ?? "Failed to rename image");
+        return;
+      }
+      await updateImageFileInfo(image.id, newPath, fileName);
+      setImages((prev) =>
+        prev.map((entry) =>
+          entry.id === image.id ? { ...entry, filePath: newPath, fileName, fileUrl: newPath } : entry
+        )
+      );
+      setTabs((prev) =>
+        prev.map((tab) =>
+          tab.type === "image" && tab.image.id === image.id
+            ? { ...tab, title: fileName, image: { ...tab.image, filePath: newPath, fileName, fileUrl: newPath } }
+            : tab
+        )
+      );
+      setActiveTab((currentTab) =>
+        currentTab.type === "image" && currentTab.image.id === image.id
+          ? { ...currentTab, title: fileName, image: { ...currentTab.image, filePath: newPath, fileName, fileUrl: newPath } }
+          : currentTab
+      );
+      setThumbnailMap((prev) => {
+        const next = { ...prev };
+        delete next[image.id];
+        return next;
+      });
+      setLoadedThumbs((prev) => {
+        const next = new Set(prev);
+        next.delete(image.id);
+        return next;
+      });
+      hydrateFileUrls([{ ...image, filePath: newPath, fileName, fileUrl: newPath }]);
+      setToastMessage(`Renamed image to ${fileName}`);
+      setLastCopied(`Renamed image to ${fileName}`);
+      setRenameState(null);
+      return;
+    }
+
+    const album = albums.find((entry) => entry.id === current.id);
+    if (!album || !window.comfy?.renamePath) {
+      setRenameState(null);
+      return;
+    }
+    if (trimmed === album.name) {
+      setRenameState(null);
+      return;
+    }
+    const parentPath = getParentPath(album.rootPath);
+    const newRootPath = joinPath(parentPath, trimmed);
+    const result = await window.comfy.renamePath({ oldPath: album.rootPath, newPath: newRootPath, kind: "folder" });
+    if (!result?.success) {
+      setToastMessage(result?.message ?? "Failed to rename album");
+      setLastCopied(result?.message ?? "Failed to rename album");
+      return;
+    }
+    await updateAlbumInfo(album.id, { name: trimmed, rootPath: newRootPath });
+    const prefix = ensureTrailingSeparator(album.rootPath);
+    const nextPrefix = ensureTrailingSeparator(newRootPath);
+    const updatedImages = images
+      .filter((entry) => entry.albumId === album.id)
+      .map((entry) => {
+        const nextPath = entry.filePath.startsWith(prefix)
+          ? `${nextPrefix}${entry.filePath.slice(prefix.length)}`
+          : entry.filePath;
+        return { ...entry, filePath: nextPath, fileUrl: nextPath };
+      });
+    await Promise.all(
+      updatedImages.map((entry) => updateImageFileInfo(entry.id, entry.filePath, entry.fileName))
+    );
+    const updatedMap = new Map(updatedImages.map((entry) => [entry.id, entry]));
+    setAlbums((prev) => prev.map((entry) => (entry.id === album.id ? { ...entry, name: trimmed, rootPath: newRootPath } : entry)));
+    setImages((prev) => prev.map((entry) => updatedMap.get(entry.id) ?? entry));
+    setTabs((prev) =>
+      prev.map((tab) =>
+        tab.type === "image" && tab.image.albumId === album.id
+          ? {
+              ...tab,
+              image: updatedMap.get(tab.image.id) ?? tab.image,
+            }
+          : tab
+      )
+    );
+    setActiveTab((currentTab) =>
+      currentTab.type === "image" && currentTab.image.albumId === album.id
+        ? { ...currentTab, image: updatedMap.get(currentTab.image.id) ?? currentTab.image }
+        : currentTab
+    );
+    setThumbnailMap((prev) => {
+      const next = { ...prev };
+      updatedImages.forEach((entry) => {
+        delete next[entry.id];
+      });
+      return next;
+    });
+    setLoadedThumbs((prev) => {
+      const next = new Set(prev);
+      updatedImages.forEach((entry) => next.delete(entry.id));
+      return next;
+    });
+    hydrateFileUrls(updatedImages);
+    setToastMessage(`Renamed album to ${trimmed}`);
+    setLastCopied(`Renamed album to ${trimmed}`);
+    setRenameState(null);
+  }
 
   const handleRemoveSelected = async () => {
     if (selectedIds.size === 0) return;
@@ -1130,6 +1344,9 @@ export default function App() {
       selectedCount: selectedIds.size,
       isSelected: selectedIds.has(image.id),
     });
+    if (action === "rename-image") {
+      startRenameImage(image);
+    }
     if (action === "remove-selected-images") {
       await handleRemoveImages(Array.from(selectedIds));
     }
@@ -1163,6 +1380,9 @@ export default function App() {
       selectedCount: selectedAlbumIds.size,
       isSelected: selectedAlbumIds.has(album.id),
     });
+    if (action === "rename-album") {
+      startRenameAlbum(album);
+    }
     if (action === "rescan-album") {
       await handleRescanAlbums([album.id]);
     }
@@ -1191,6 +1411,27 @@ export default function App() {
     value.endsWith("/") || value.endsWith("\\") ? value : `${value}${getPathSeparator(value)}`;
   const isPathWithinRoot = (candidate: string, root: string) =>
     candidate === root || candidate.startsWith(ensureTrailingSeparator(root));
+  const getParentPath = (value: string) => {
+    const separator = getPathSeparator(value);
+    const parts = value.split(/[/\\]/).filter((segment) => segment.length > 0);
+    if (parts.length <= 1) {
+      return value;
+    }
+    const parent = parts.slice(0, -1).join(separator);
+    if (value.startsWith(separator)) {
+      return `${separator}${parent}`;
+    }
+    if (/^[A-Za-z]:/.test(value)) {
+      return `${parts[0]}${separator}${parts.slice(1, -1).join(separator)}`;
+    }
+    return parent;
+  };
+  const joinPath = (base: string, next: string) => `${ensureTrailingSeparator(base)}${next}`;
+  const getFileExtension = (name: string) => {
+    const index = name.lastIndexOf(".");
+    if (index <= 0) return "";
+    return name.slice(index);
+  };
 
   const handleRescanAlbums = async (albumIds: string[]) => {
     if (!bridgeAvailable || !window.comfy?.indexFolders) return;
@@ -1416,6 +1657,30 @@ export default function App() {
         void handleDeleteSelectedAlbumsFromDisk();
         return;
       }
+      if (action === "rename-selected-image") {
+        const target =
+          activeTab.type === "image"
+            ? activeTab.image
+            : selectedIds.size === 1
+            ? images.find((image) => selectedIds.has(image.id))
+            : null;
+        if (target) {
+          startRenameImage(target);
+        }
+        return;
+      }
+      if (action === "rename-selected-album") {
+        const target =
+          selectedAlbumIds.size === 1
+            ? albums.find((album) => selectedAlbumIds.has(album.id))
+            : activeAlbum !== "all"
+            ? albumById.get(activeAlbum) ?? null
+            : null;
+        if (target) {
+          startRenameAlbum(target);
+        }
+        return;
+      }
       if (action === "reveal-active-image") {
         void handleRevealInFolder(fallbackImage?.filePath);
         return;
@@ -1467,10 +1732,13 @@ export default function App() {
     handleRevealInFolder,
     selectedIds,
     images,
+  albums,
     activeTab,
     activeAlbum,
     albumById,
     selectedAlbumIds,
+    startRenameImage,
+    startRenameAlbum,
     tabs,
   ]);
 
@@ -1486,6 +1754,8 @@ export default function App() {
       hasActiveAlbum,
       hasSelectedImages: isLibraryTab && selectedIds.size > 0,
       hasSelectedAlbums: selectedAlbumIds.size > 0,
+      hasSingleSelectedImage: activeTab.type === "image" || (isLibraryTab && selectedIds.size === 1),
+      hasSingleSelectedAlbum: selectedAlbumIds.size === 1 || (activeAlbum !== "all" && selectedAlbumIds.size === 0),
       hasImages: isLibraryTab && filteredImages.length > 0,
       hasAlbums: albums.length > 0,
     });
@@ -1573,7 +1843,6 @@ export default function App() {
     document.documentElement.style.setProperty("--viewer-zoom", `${value}`);
   }, [zoomMode, zoomLevel]);
 
-  const selectedImages = images.filter((image) => selectedIds.has(image.id));
   const metadataSummary = activeTab.type === "image" ? extractMetadataSummary(activeTab.image.metadataText) : null;
 
   useEffect(() => {
@@ -1784,15 +2053,52 @@ export default function App() {
                     className="mt-1 h-3.5 w-3.5 rounded border-slate-600 bg-slate-900"
                     aria-label={`Select ${album.name}`}
                   />
-                  <button
-                    onClick={() => setActiveAlbum(album.id)}
-                    className="min-w-0 flex-1 text-left"
-                  >
-                    <div className="font-medium">{album.name}</div>
-                    <div className="truncate text-xs text-slate-400" title={album.rootPath}>
-                      {album.rootPath}
+                  {renameState?.type === "album" && renameState.id === album.id ? (
+                    <div className="min-w-0 flex-1 text-left">
+                      <input
+                        ref={renameInputRef}
+                        value={renameState.value}
+                        onChange={(event) =>
+                          setRenameState((prev) =>
+                            prev && prev.type === "album" && prev.id === album.id
+                              ? { ...prev, value: event.target.value }
+                              : prev
+                          )
+                        }
+                        onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            void commitRename();
+                          }
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            renameCancelRef.current = true;
+                            cancelRename();
+                          }
+                        }}
+                        onBlur={() => {
+                          if (renameCancelRef.current) {
+                            renameCancelRef.current = false;
+                            return;
+                          }
+                          void commitRename();
+                        }}
+                        className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100"
+                        aria-label="Rename album"
+                      />
+                      <div className="truncate text-xs text-slate-400" title={album.rootPath}>
+                        {album.rootPath}
+                      </div>
                     </div>
-                  </button>
+                  ) : (
+                    <button onClick={() => setActiveAlbum(album.id)} className="min-w-0 flex-1 text-left">
+                      <div className="font-medium">{album.name}</div>
+                      <div className="truncate text-xs text-slate-400" title={album.rootPath}>
+                        {album.rootPath}
+                      </div>
+                    </button>
+                  )}
                 </label>
               </div>
             ))}
@@ -1992,6 +2298,72 @@ export default function App() {
                     const thumbUrl = thumbnailMap[image.id] ?? image.fileUrl;
                     const isLoaded = loadedThumbs.has(image.id);
 
+                    const isRenaming = renameState?.type === "image" && renameState.id === image.id;
+
+                    if (isRenaming) {
+                      return (
+                        <div
+                          key={image.id}
+                          className={`absolute rounded-xl border p-2 text-left transition ${
+                            isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800"
+                          } ${absoluteIndex === focusedIndex ? "ring-2 ring-indigo-400" : ""}`}
+                          /* eslint-disable-next-line react/forbid-dom-props */
+                          style={{ top, left, width: iconSize, height: rowHeight - GRID_GAP }}
+                        >
+                          <div className="relative aspect-square overflow-hidden rounded-lg bg-slate-950 p-1">
+                            {!isLoaded ? (
+                              <div className="absolute inset-0 animate-pulse rounded-lg bg-slate-900" />
+                            ) : null}
+                            <img
+                              src={thumbUrl}
+                              alt={image.fileName}
+                              loading="lazy"
+                              className={`h-full w-full object-contain transition-opacity ${
+                                isLoaded ? "opacity-100" : "opacity-0"
+                              }`}
+                              draggable={false}
+                              onLoad={() => {
+                                setLoadedThumbs((prev) => new Set(prev).add(image.id));
+                              }}
+                            />
+                          </div>
+                          <input
+                            ref={renameInputRef}
+                            value={renameState.value}
+                            onChange={(event) =>
+                              setRenameState((prev) =>
+                                prev && prev.type === "image" && prev.id === image.id
+                                  ? { ...prev, value: event.target.value }
+                                  : prev
+                              )
+                            }
+                            onClick={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                void commitRename();
+                              }
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                renameCancelRef.current = true;
+                                cancelRename();
+                              }
+                            }}
+                            onBlur={() => {
+                              if (renameCancelRef.current) {
+                                renameCancelRef.current = false;
+                                return;
+                              }
+                              void commitRename();
+                            }}
+                            className="mt-2 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100"
+                            aria-label="Rename image"
+                          />
+                          <div className="text-[11px] text-slate-500">{formatBytes(image.sizeBytes)}</div>
+                        </div>
+                      );
+                    }
+
                     return (
                       <button
                         key={image.id}
@@ -2124,7 +2496,41 @@ export default function App() {
                 </div>
               </div>
               <aside className="w-96 border-l border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-200">
-                <div className="text-lg font-semibold">{activeTabContent.fileName}</div>
+                {renameState?.type === "image" && renameState.id === activeTabContent.id ? (
+                  <input
+                    ref={renameInputRef}
+                    value={renameState.value}
+                    onChange={(event) =>
+                      setRenameState((prev) =>
+                        prev && prev.type === "image" && prev.id === activeTabContent.id
+                          ? { ...prev, value: event.target.value }
+                          : prev
+                      )
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void commitRename();
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        renameCancelRef.current = true;
+                        cancelRename();
+                      }
+                    }}
+                    onBlur={() => {
+                      if (renameCancelRef.current) {
+                        renameCancelRef.current = false;
+                        return;
+                      }
+                      void commitRename();
+                    }}
+                    className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-base text-slate-100"
+                    aria-label="Rename image"
+                  />
+                ) : (
+                  <div className="text-lg font-semibold">{activeTabContent.fileName}</div>
+                )}
                 <div className="mt-2 text-xs text-slate-500">{activeTabContent.filePath}</div>
                 <div className="mt-4 space-y-2">
                   <div>Album: {albumById.get(activeTabContent.albumId)?.name ?? "Unknown"}</div>

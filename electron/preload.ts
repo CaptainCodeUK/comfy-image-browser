@@ -17,11 +17,17 @@ contextBridge.exposeInMainWorld("comfy", {
   revealInFolder: (filePath: string) => ipcRenderer.invoke("comfy:reveal-in-folder", filePath),
   openInEditor: (filePath: string) => ipcRenderer.invoke("comfy:open-in-editor", filePath),
   findMissingFiles: (paths: string[]) => ipcRenderer.invoke("comfy:find-missing-files", paths),
+  renamePath: (payload: { oldPath: string; newPath: string; kind: "file" | "folder" }) =>
+    ipcRenderer.invoke("comfy:rename-path", payload),
   updateMenuState: (state: {
     hasActiveImage: boolean;
     hasActiveAlbum: boolean;
     hasSelectedImages: boolean;
     hasSelectedAlbums: boolean;
+    hasSingleSelectedImage: boolean;
+    hasSingleSelectedAlbum: boolean;
+    hasImages: boolean;
+    hasAlbums: boolean;
   }) => ipcRenderer.send("comfy:update-menu-state", state),
   onMenuAction: (callback: (action: string) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, action: string) => callback(action);

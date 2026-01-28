@@ -8,7 +8,7 @@ declare global {
         paths: string[],
         existingPaths?: string[]
       ) => Promise<Array<{ rootPath: string; images: IndexedImagePayload[] }>>;
-  cancelIndexing: () => Promise<void>;
+      cancelIndexing: () => Promise<void>;
       toFileUrl: (filePath: string) => Promise<string>;
       getThumbnail: (filePath: string) => Promise<string | null>;
       showContextMenu: (
@@ -22,8 +22,10 @@ declare global {
         | "delete-selected-albums-disk"
         | "reveal-image"
   | "edit-image"
+        | "rename-image"
         | "reveal-album"
         | "rescan-album"
+        | "rename-album"
         | "select-all-images"
         | "invert-image-selection"
         | "clear-image-selection"
@@ -40,16 +42,47 @@ declare global {
       revealInFolder: (filePath: string) => Promise<void>;
       openInEditor: (filePath: string) => Promise<void>;
       findMissingFiles: (paths: string[]) => Promise<string[]>;
+      renamePath: (payload: { oldPath: string; newPath: string; kind: "file" | "folder" }) => Promise<{
+        success: boolean;
+        message?: string;
+      }>;
       updateMenuState: (state: {
         hasActiveImage: boolean;
         hasActiveAlbum: boolean;
         hasSelectedImages: boolean;
         hasSelectedAlbums: boolean;
+        hasSingleSelectedImage: boolean;
+        hasSingleSelectedAlbum: boolean;
         hasImages: boolean;
         hasAlbums: boolean;
       }) => void;
       onMenuAction: (
-        callback: (action: "add-folder" | "remove-selected-images" | "remove-selected-albums" | "delete-selected-images-disk" | "delete-selected-albums-disk" | "reveal-active-image" | "reveal-active-album" | "edit-active-image" | "rescan-selected-albums" | "select-all-images" | "invert-image-selection" | "clear-image-selection" | "select-all-albums" | "invert-album-selection" | "clear-album-selection" | "tab-next" | "tab-prev" | "tab-duplicate" | "tab-close" | "tab-close-others" | "tab-close-all") => void
+        callback: (
+          action:
+            | "add-folder"
+            | "remove-selected-images"
+            | "remove-selected-albums"
+            | "delete-selected-images-disk"
+            | "delete-selected-albums-disk"
+            | "reveal-active-image"
+            | "reveal-active-album"
+            | "edit-active-image"
+            | "rename-selected-image"
+            | "rename-selected-album"
+            | "rescan-selected-albums"
+            | "select-all-images"
+            | "invert-image-selection"
+            | "clear-image-selection"
+            | "select-all-albums"
+            | "invert-album-selection"
+            | "clear-album-selection"
+            | "tab-next"
+            | "tab-prev"
+            | "tab-duplicate"
+            | "tab-close"
+            | "tab-close-others"
+            | "tab-close-all"
+        ) => void
       ) => () => void;
       onIndexingFolder: (callback: (payload: { current: number; total: number; folder: string }) => void) => () => void;
       onIndexingImage: (callback: (payload: { current: number; total: number; fileName: string }) => void) => () => void;

@@ -188,6 +188,12 @@ const buildAppMenu = () => {
         click: () => sendMenuAction("reveal-active-album"),
       },
       {
+        id: "menu-rename-selected-album",
+        label: "Rename Selected Album…",
+        enabled: false,
+        click: () => sendMenuAction("rename-selected-album"),
+      },
+      {
         id: "menu-rescan-selected-albums",
         label: "Rescan Selected Albums",
         enabled: false,
@@ -245,6 +251,12 @@ const buildAppMenu = () => {
         label: "Edit Active Image in Default App",
         enabled: false,
         click: () => sendMenuAction("edit-active-image"),
+      },
+      {
+        id: "menu-rename-selected-image",
+        label: "Rename Selected Image…",
+        enabled: false,
+        click: () => sendMenuAction("rename-selected-image"),
       },
       { type: "separator" },
       {
@@ -322,7 +334,7 @@ const buildAppMenu = () => {
   });
 
 //   template.push({
-//     label: "View",
+//     label: "Dev",
 //     submenu: [
 //       { role: "reload" },
 //       { role: "forceReload" },
@@ -668,6 +680,45 @@ ipcMain.handle("comfy:open-in-editor", async (_event: IpcMainInvokeEvent, filePa
   await shell.openPath(filePath);
 });
 
+ipcMain.handle(
+  "comfy:rename-path",
+  async (
+    _event: IpcMainInvokeEvent,
+    payload: { oldPath: string; newPath: string; kind: "file" | "folder" }
+  ) => {
+    if (!payload?.oldPath || !payload?.newPath) {
+      return { success: false, message: "Missing path" };
+    }
+    try {
+      await fs.access(payload.oldPath);
+    } catch {
+      return { success: false, message: "Source path does not exist" };
+    }
+    try {
+      await fs.access(payload.newPath);
+      return { success: false, message: "Target already exists" };
+    } catch {
+      // target does not exist
+    }
+
+    await fs.rename(payload.oldPath, payload.newPath);
+
+    if (payload.kind === "file") {
+      const oldFolder = path.dirname(payload.oldPath);
+      const newFolder = path.dirname(payload.newPath);
+      const oldThumb = path.join(oldFolder, THUMBNAIL_DIR, path.basename(payload.oldPath));
+      const newThumb = path.join(newFolder, THUMBNAIL_DIR, path.basename(payload.newPath));
+      try {
+        await fs.rename(oldThumb, newThumb);
+      } catch {
+        // ignore missing thumbnail
+      }
+    }
+
+    return { success: true };
+  }
+);
+
 ipcMain.handle("comfy:find-missing-files", async (_event: IpcMainInvokeEvent, filePaths: string[]) => {
   if (!Array.isArray(filePaths) || filePaths.length === 0) {
     return [] as string[];
@@ -685,6 +736,8 @@ ipcMain.on(
       hasActiveAlbum: boolean;
       hasSelectedImages: boolean;
       hasSelectedAlbums: boolean;
+      hasSingleSelectedImage: boolean;
+      hasSingleSelectedAlbum: boolean;
       hasImages: boolean;
       hasAlbums: boolean;
     }
@@ -692,6 +745,8 @@ ipcMain.on(
     updateMenuItemEnabled("menu-reveal-active-image", state.hasActiveImage);
     updateMenuItemEnabled("menu-edit-active-image", state.hasActiveImage);
     updateMenuItemEnabled("menu-reveal-active-album", state.hasActiveAlbum);
+  updateMenuItemEnabled("menu-rename-selected-image", state.hasSingleSelectedImage);
+  updateMenuItemEnabled("menu-rename-selected-album", state.hasSingleSelectedAlbum);
     updateMenuItemEnabled("menu-remove-selected-images", state.hasSelectedImages);
     updateMenuItemEnabled("menu-delete-selected-images-disk", state.hasSelectedImages);
     updateMenuItemEnabled("menu-remove-selected-albums", state.hasSelectedAlbums);
@@ -802,6 +857,12 @@ ipcMain.handle(
           label: "Edit in Default App",
           click: () => finish("edit-image"),
         });
+        if (payload.selectedCount <= 1) {
+          items.push({
+            label: "Rename Image…",
+            click: () => finish("rename-image"),
+          });
+        }
         if (payload.selectedCount >= 1) {
           items.push({
             label: `Remove Selected Images from Index${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""}…`,
@@ -836,6 +897,12 @@ ipcMain.handle(
           label: "Rescan Album",
           click: () => finish("rescan-album"),
         });
+        if (payload.selectedCount <= 1) {
+          items.push({
+            label: "Rename Album…",
+            click: () => finish("rename-album"),
+          });
+        }
         if (payload.selectedCount >= 1) {
           items.push({
             label: `Remove Selected Albums from Index${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""}…`,

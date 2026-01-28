@@ -123,6 +123,24 @@ export const removeAlbumById = async (albumId: string) => {
   await tx.done;
 };
 
+export const updateAlbumInfo = async (albumId: string, updates: Partial<Album>) => {
+  const db = await dbPromise;
+  const album = await db.get("albums", albumId);
+  if (!album) return null;
+  const updated = { ...album, ...updates } as Album;
+  await db.put("albums", updated);
+  return updated;
+};
+
+export const updateImageFileInfo = async (imageId: string, filePath: string, fileName: string) => {
+  const db = await dbPromise;
+  const image = await db.get("images", imageId);
+  if (!image) return null;
+  const updated = { ...image, filePath, fileName, fileUrl: filePath } as IndexedImage;
+  await db.put("images", updated);
+  return updated;
+};
+
 export const getImageViewPrefs = async (imageId: string) => {
   const db = await dbPromise;
   return db.get("imagePrefs", imageId);
