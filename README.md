@@ -24,6 +24,7 @@ Pre-built binaries are published on the GitHub Releases page for this repository
 ## Shortcuts
 
 - **★ / ☆ button**: Add or remove favourites in the grid and image viewer.
+- **Ctrl/Cmd + B**: Toggle favourite for the active image or a single selected image.
 - **F2**: Rename selected image.
 - **Shift+F2**: Rename selected album.
 - **Ctrl/Cmd + A**: Select all images (Shift to select all albums).

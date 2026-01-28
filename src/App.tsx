@@ -797,6 +797,19 @@ export default function App() {
         void handleOpenImages(selectedImages);
         return;
       }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
+        event.preventDefault();
+        const target =
+          activeTab.type === "image"
+            ? activeTab.image
+            : selectedIds.size === 1
+            ? images.find((image) => selectedIds.has(image.id))
+            : null;
+        if (target) {
+          void toggleFavoriteImage(target);
+        }
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
         event.preventDefault();
         if (event.shiftKey) {
@@ -940,6 +953,7 @@ export default function App() {
     selectedImages,
     startRenameImage,
     startRenameAlbum,
+  toggleFavoriteImage,
     selectionAnchor,
     getRangeIds,
     tabs,
@@ -1200,7 +1214,7 @@ export default function App() {
     await handleRemoveImages(Array.from(selectedIds), { label: `${selectedIds.size} selected images` });
   };
 
-  const addFavoriteImages = async (ids: string[], label?: string) => {
+  async function addFavoriteImages(ids: string[], label?: string) {
     const unique = ids.filter((id) => !favoriteIds.has(id));
     if (unique.length === 0) return;
     await addFavorites(unique);
@@ -1209,9 +1223,9 @@ export default function App() {
       setToastMessage(label);
       setLastCopied(label);
     }
-  };
+  }
 
-  const removeFavoriteImages = async (ids: string[], label?: string) => {
+  async function removeFavoriteImages(ids: string[], label?: string) {
     if (ids.length === 0) return;
     await removeFavorites(ids);
     setFavoriteIds((prev) => {
@@ -1223,27 +1237,27 @@ export default function App() {
       setToastMessage(label);
       setLastCopied(label);
     }
-  };
+  }
 
-  const toggleFavoriteImage = async (image: IndexedImage) => {
+  async function toggleFavoriteImage(image: IndexedImage) {
     if (favoriteIds.has(image.id)) {
       await removeFavoriteImages([image.id], `${image.fileName} removed from favourites`);
     } else {
       await addFavoriteImages([image.id], `${image.fileName} added to favourites`);
     }
-  };
+  }
 
-  const addAlbumToFavorites = async (album: Album) => {
+  async function addAlbumToFavorites(album: Album) {
     const albumImages = images.filter((image) => image.albumId === album.id).map((image) => image.id);
     if (albumImages.length === 0) return;
     await addFavoriteImages(albumImages, `${album.name} added to favourites`);
-  };
+  }
 
-  const removeAlbumFromFavorites = async (album: Album) => {
+  async function removeAlbumFromFavorites(album: Album) {
     const albumImages = images.filter((image) => image.albumId === album.id).map((image) => image.id);
     if (albumImages.length === 0) return;
     await removeFavoriteImages(albumImages, `${album.name} removed from favourites`);
-  };
+  }
 
   const removeAlbumFromIndex = async (albumId: string) => {
     await removeAlbumById(albumId);
