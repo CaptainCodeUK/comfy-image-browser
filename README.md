@@ -9,6 +9,7 @@ Comfy Browser is a desktop catalog for ComfyUI images. Point it at your output f
 - Virtualized icon grid with adjustable thumbnail size and keyboard navigation.
 - Tabbed image viewer with duplication, close/close-others/close-all controls, and keyboard shortcuts.
 - Inline rename for images and albums (F2 to rename an image, Shift+F2 for albums), plus menu/context actions.
+- Favourites virtual album with star toggles, searchable like any album, and menu/context actions to add/remove images or whole albums.
 - Local thumbnail cache (`.thumbs`) for faster repeat browsing.
 - Non-destructive remove from index, plus optional delete-from-disk actions with confirmation.
 
@@ -22,6 +23,7 @@ Pre-built binaries are published on the GitHub Releases page for this repository
 
 ## Shortcuts
 
+- **★ / ☆ button**: Add or remove favourites in the grid and image viewer.
 - **F2**: Rename selected image.
 - **Shift+F2**: Rename selected album.
 - **Ctrl/Cmd + A**: Select all images (Shift to select all albums).
@@ -32,6 +34,12 @@ Pre-built binaries are published on the GitHub Releases page for this repository
 - **Ctrl/Cmd + Shift + W**: Close other tabs.
 - **Ctrl/Cmd + Alt + W**: Close all tabs.
 - **Ctrl + Tab / Ctrl + Shift + Tab**: Cycle tabs (next/previous).
+
+## Favourites
+
+- Use the star toggle (★ / ☆) in the grid or image viewer to add or remove favourites.
+- Adding an album to favourites marks all images in that album as favourites.
+- The **Favourites** virtual album is always visible and fully searchable.
 
 ## Development (Vite + Electron)
 

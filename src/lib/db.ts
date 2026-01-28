@@ -2,7 +2,7 @@ import { openDB, type IDBPDatabase } from "idb";
 import type { Album, IndexedImage, IndexedImagePayload } from "./types";
 
 const DB_NAME = "comfy-browser-db";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 const dbPromise = openDB(DB_NAME, DB_VERSION, {
   upgrade(db: IDBPDatabase, _oldVersion, _newVersion, transaction) {
@@ -15,6 +15,9 @@ const dbPromise = openDB(DB_NAME, DB_VERSION, {
     }
     if (!db.objectStoreNames.contains("imagePrefs")) {
       db.createObjectStore("imagePrefs", { keyPath: "imageId" });
+    }
+    if (!db.objectStoreNames.contains("favorites")) {
+      db.createObjectStore("favorites", { keyPath: "imageId" });
     }
     if (!db.objectStoreNames.contains("appPrefs")) {
       db.createObjectStore("appPrefs", { keyPath: "key" });
@@ -102,24 +105,52 @@ export const getImages = async () => {
 
 export const removeImagesById = async (ids: string[]) => {
   const db = await dbPromise;
-  const tx = db.transaction(["images", "imagePrefs"], "readwrite");
+  const tx = db.transaction(["images", "imagePrefs", "favorites"], "readwrite");
   for (const id of ids) {
     await tx.objectStore("images").delete(id);
     await tx.objectStore("imagePrefs").delete(id);
+    await tx.objectStore("favorites").delete(id);
   }
   await tx.done;
 };
 
 export const removeAlbumById = async (albumId: string) => {
   const db = await dbPromise;
-  const tx = db.transaction(["albums", "images", "imagePrefs"], "readwrite");
+  const tx = db.transaction(["albums", "images", "imagePrefs", "favorites"], "readwrite");
   const imageIndex = tx.objectStore("images").index("albumId");
   const imageKeys = await imageIndex.getAllKeys(albumId);
   for (const key of imageKeys) {
     await tx.objectStore("images").delete(key);
     await tx.objectStore("imagePrefs").delete(String(key));
+    await tx.objectStore("favorites").delete(String(key));
   }
   await tx.objectStore("albums").delete(albumId);
+  await tx.done;
+};
+
+export const getFavorites = async () => {
+  const db = await dbPromise;
+  const rows = await db.getAll("favorites");
+  return rows.map((row: { imageId: string }) => row.imageId);
+};
+
+export const addFavorites = async (ids: string[]) => {
+  if (ids.length === 0) return;
+  const db = await dbPromise;
+  const tx = db.transaction(["favorites"], "readwrite");
+  for (const id of ids) {
+    await tx.objectStore("favorites").put({ imageId: id, addedAt: new Date().toISOString() });
+  }
+  await tx.done;
+};
+
+export const removeFavorites = async (ids: string[]) => {
+  if (ids.length === 0) return;
+  const db = await dbPromise;
+  const tx = db.transaction(["favorites"], "readwrite");
+  for (const id of ids) {
+    await tx.objectStore("favorites").delete(id);
+  }
   await tx.done;
 };
 
