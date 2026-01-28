@@ -802,23 +802,13 @@ ipcMain.handle(
           label: "Edit in Default App",
           click: () => finish("edit-image"),
         });
-        items.push({
-          label: `Remove ${payload.label} from Index…`,
-          click: () => finish("remove-image"),
-        });
-        if (payload.selectedCount > 1) {
+        if (payload.selectedCount >= 1) {
           items.push({
-            label: `Remove Selected Images from Index (${payload.selectedCount})…`,
+            label: `Remove Selected Images from Index${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""}…`,
             click: () => finish("remove-selected-images"),
           });
-        }
-        items.push({
-          label: `Delete ${payload.label} from Disk…`,
-          click: () => finish("delete-image-disk"),
-        });
-        if (payload.selectedCount > 1) {
           items.push({
-            label: `Delete Selected Images (${payload.selectedCount}) from Disk…`,
+            label: `Delete Selected Images${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""} from Disk…`,
             click: () => finish("delete-selected-images-disk"),
           });
         }
@@ -846,23 +836,13 @@ ipcMain.handle(
           label: "Rescan Album",
           click: () => finish("rescan-album"),
         });
-        items.push({
-          label: `Remove ${payload.label} from Index…`,
-          click: () => finish("remove-album"),
-        });
-        if (payload.selectedCount > 1) {
+        if (payload.selectedCount >= 1) {
           items.push({
-            label: `Remove Selected Albums from Index (${payload.selectedCount})…`,
+            label: `Remove Selected Albums from Index${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""}…`,
             click: () => finish("remove-selected-albums"),
           });
-        }
-        items.push({
-          label: `Delete ${payload.label} Images from Disk…`,
-          click: () => finish("delete-album-disk"),
-        });
-        if (payload.selectedCount > 1) {
           items.push({
-            label: `Delete Selected Albums (${payload.selectedCount}) from Disk…`,
+            label: `Delete Selected Albums${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""} from Disk…`,
             click: () => finish("delete-selected-albums-disk"),
           });
         }

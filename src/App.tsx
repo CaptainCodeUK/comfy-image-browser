@@ -1120,14 +1120,8 @@ export default function App() {
       selectedCount: selectedIds.size,
       isSelected: selectedIds.has(image.id),
     });
-    if (action === "remove-image") {
-      await handleRemoveImages([image.id]);
-    }
     if (action === "remove-selected-images") {
       await handleRemoveImages(Array.from(selectedIds));
-    }
-    if (action === "delete-image-disk") {
-      await handleDeleteImagesFromDisk([image.id], image.fileName);
     }
     if (action === "delete-selected-images-disk") {
       await handleDeleteImagesFromDisk(Array.from(selectedIds), `${selectedIds.size} selected images`);
@@ -1159,17 +1153,11 @@ export default function App() {
       selectedCount: selectedAlbumIds.size,
       isSelected: selectedAlbumIds.has(album.id),
     });
-    if (action === "remove-album") {
-      await handleRemoveAlbum(album.id);
-    }
     if (action === "rescan-album") {
       await handleRescanAlbums([album.id]);
     }
     if (action === "remove-selected-albums") {
       await handleRemoveSelectedAlbums();
-    }
-    if (action === "delete-album-disk") {
-      await handleDeleteAlbumFromDisk(album.id);
     }
     if (action === "delete-selected-albums-disk") {
       await handleDeleteSelectedAlbumsFromDisk();

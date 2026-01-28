@@ -16,13 +16,9 @@ declare global {
           | { type: "image"; imageId: string; label: string; selectedCount: number; isSelected: boolean }
           | { type: "album"; albumId: string; label: string; selectedCount: number; isSelected: boolean }
       ) => Promise<
-        | "remove-image"
         | "remove-selected-images"
-        | "remove-album"
         | "remove-selected-albums"
-        | "delete-image-disk"
         | "delete-selected-images-disk"
-        | "delete-album-disk"
         | "delete-selected-albums-disk"
         | "reveal-image"
         | "reveal-album"
