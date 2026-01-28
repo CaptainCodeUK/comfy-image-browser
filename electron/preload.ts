@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld("comfy", {
     ipcRenderer.invoke("comfy:rename-path", payload),
   getAppInfo: () => ipcRenderer.invoke("comfy:get-app-info"),
   openExternal: (url: string) => ipcRenderer.invoke("comfy:open-external", url),
+  toggleDevTools: () => ipcRenderer.invoke("comfy:toggle-devtools"),
   updateMenuState: (state: {
     hasActiveImage: boolean;
     hasActiveAlbum: boolean;

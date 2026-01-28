@@ -52,6 +52,7 @@ declare global {
       }>;
       getAppInfo: () => Promise<{ name: string; version: string }>;
       openExternal: (url: string) => Promise<boolean>;
+  toggleDevTools: () => Promise<boolean>;
       updateMenuState: (state: {
         hasActiveImage: boolean;
         hasActiveAlbum: boolean;

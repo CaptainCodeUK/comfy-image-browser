@@ -32,6 +32,7 @@ Pre-built binaries are published on the GitHub Releases page for this repository
 
 #### Image and Album Management
 - **Ctrl/Cmd + B**: Toggle favourite for the active image or a single selected image.
+- **Ctrl/Cmd + Alt + D**: Toggle DevTools.
 - **F2**: Rename selected image.
 - **Shift+F2**: Rename selected album.
 - **Ctrl/Cmd + A**: Select all images (Shift to select all albums).

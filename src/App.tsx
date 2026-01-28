@@ -817,6 +817,11 @@ export default function App() {
         }
         return;
       }
+      if ((event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        void window.comfy?.toggleDevTools?.();
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
         event.preventDefault();
         if (event.shiftKey) {

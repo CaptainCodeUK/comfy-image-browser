@@ -125,7 +125,7 @@ const createWindow = async () => {
 
     if (process.env.VITE_DEV_SERVER_URL) {
         mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
-        mainWindow.webContents.openDevTools({ mode: "right" });
+        // mainWindow.webContents.openDevTools({ mode: "right" });
     } else {
         mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
     }
@@ -731,6 +731,13 @@ ipcMain.handle("comfy:open-external", async (_event: IpcMainInvokeEvent, url: st
     } catch {
         return false;
     }
+});
+
+ipcMain.handle("comfy:toggle-devtools", () => {
+    const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    if (!target) return false;
+    target.webContents.toggleDevTools();
+    return true;
 });
 
 ipcMain.handle(
