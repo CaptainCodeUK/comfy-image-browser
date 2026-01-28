@@ -50,6 +50,8 @@ declare global {
         success: boolean;
         message?: string;
       }>;
+      getAppInfo: () => Promise<{ name: string; version: string }>;
+      openExternal: (url: string) => Promise<boolean>;
       updateMenuState: (state: {
         hasActiveImage: boolean;
         hasActiveAlbum: boolean;
@@ -90,6 +92,7 @@ declare global {
             | "tab-close"
             | "tab-close-others"
             | "tab-close-all"
+            | "show-about"
         ) => void
       ) => () => void;
       onIndexingFolder: (callback: (payload: { current: number; total: number; folder: string }) => void) => () => void;

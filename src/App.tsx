@@ -200,6 +200,8 @@ export default function App() {
   const [selectionAnchor, setSelectionAnchor] = useState<number | null>(null);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [renameState, setRenameState] = useState<RenameState>(null);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [appInfo, setAppInfo] = useState<{ name: string; version: string } | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const renameCancelRef = useRef(false);
   const renameTargetRef = useRef<string | null>(null);
@@ -213,6 +215,11 @@ export default function App() {
   useEffect(() => {
     console.log("[comfy-browser] UI mounted");
   }, []);
+
+  useEffect(() => {
+    if (!bridgeAvailable || !window.comfy?.getAppInfo) return;
+    window.comfy.getAppInfo().then(setAppInfo).catch(() => null);
+  }, [bridgeAvailable]);
 
   useEffect(() => {
     if (!renameState) {
@@ -1878,6 +1885,10 @@ export default function App() {
         handleCloseAllTabs();
         return;
       }
+      if (action === "show-about") {
+        setAboutOpen(true);
+        return;
+      }
     });
   }, [
     bridgeAvailable,
@@ -1900,6 +1911,7 @@ export default function App() {
     removeFavoriteImages,
     addAlbumToFavorites,
     removeAlbumFromFavorites,
+    setAboutOpen,
     tabs,
   ]);
 
@@ -2171,6 +2183,35 @@ export default function App() {
           {bridgeError}
         </div>
       ) : null}
+      {aboutOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/70">
+          <div className="pointer-events-auto w-full max-w-md rounded-2xl border border-slate-800 bg-slate-950/90 px-6 py-5 text-sm text-slate-100 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold">{appInfo?.name ?? "Comfy Browser"}</div>
+                <div className="mt-1 text-xs text-slate-400">Version {appInfo?.version ?? "—"}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAboutOpen(false)}
+                className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-slate-500"
+              >
+                Close
+              </button>
+            </div>
+            <div className="mt-4 space-y-2 text-sm text-slate-300">
+              <p>Thanks for using Comfy Browser! If you’d like to support development, consider buying me a cup of coffee, over on Ko‑Fi.</p>
+              <button
+                type="button"
+                onClick={() => window.comfy?.openExternal("https://ko-fi.com/captaincodeuk")}
+                className="inline-flex items-center gap-2 rounded-md border border-amber-400/70 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 hover:border-amber-300"
+              >
+                ☕ Ko‑Fi
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-1 overflow-hidden">
         <aside className="flex w-64 flex-col border-r border-slate-800 bg-slate-950/50 p-4">
@@ -2297,6 +2338,13 @@ export default function App() {
               </button>
               <div className="text-[11px] text-slate-500">{selectedAlbumIds.size} selected</div>
             </div>
+            <button
+              type="button"
+              onClick={() => window.comfy?.openExternal("https://ko-fi.com/captaincodeuk")}
+              className="w-full text-left text-[11px] text-slate-500 hover:text-slate-300"
+            >
+              Support development on Ko‑Fi
+            </button>
           </div>
         </aside>
 

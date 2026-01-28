@@ -357,6 +357,16 @@ const buildAppMenu = () => {
         ],
     });
 
+    template.push({
+        label: "Help",
+        submenu: [
+            {
+                label: "About Comfy Browser",
+                click: () => sendMenuAction("show-about"),
+            },
+        ],
+    });
+
     //   template.push({
     //     label: "Dev",
     //     submenu: [
@@ -702,6 +712,23 @@ ipcMain.handle("comfy:reveal-in-folder", async (_event: IpcMainInvokeEvent, file
 
 ipcMain.handle("comfy:open-in-editor", async (_event: IpcMainInvokeEvent, filePath: string) => {
     await shell.openPath(filePath);
+});
+
+ipcMain.handle("comfy:get-app-info", () => {
+    return {
+        name: app.getName(),
+        version: app.getVersion(),
+    };
+});
+
+ipcMain.handle("comfy:open-external", async (_event: IpcMainInvokeEvent, url: string) => {
+    if (!url) return false;
+    try {
+        await shell.openExternal(url);
+        return true;
+    } catch {
+        return false;
+    }
 });
 
 ipcMain.handle(

@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld("comfy", {
   findMissingFiles: (paths: string[]) => ipcRenderer.invoke("comfy:find-missing-files", paths),
   renamePath: (payload: { oldPath: string; newPath: string; kind: "file" | "folder" }) =>
     ipcRenderer.invoke("comfy:rename-path", payload),
+  getAppInfo: () => ipcRenderer.invoke("comfy:get-app-info"),
+  openExternal: (url: string) => ipcRenderer.invoke("comfy:open-external", url),
   updateMenuState: (state: {
     hasActiveImage: boolean;
     hasActiveAlbum: boolean;
