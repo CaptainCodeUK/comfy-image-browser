@@ -11,6 +11,10 @@ declare global {
       cancelIndexing: () => Promise<void>;
       toFileUrl: (filePath: string) => Promise<string>;
       getThumbnail: (filePath: string) => Promise<string | null>;
+      getPreview: (filePath: string) => Promise<string | null>;
+      getCachedThumbnails: (
+        payload: Array<{ id: string; filePath: string }>
+      ) => Promise<Array<{ id: string; url: string | null }>>;
       showContextMenu: (
         payload:
           | { type: "image"; imageId: string; label: string; selectedCount: number; isSelected: boolean }

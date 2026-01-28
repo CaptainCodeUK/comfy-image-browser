@@ -17,6 +17,10 @@ Comfy Image Browser is a desktop image viewer and cataloger, with some special f
 
 All metadata lives in your local IndexedDB database. Images are never uploaded anywhere or leave your machine.
 
+## Image processing note
+
+This project intentionally avoids using `sharp` due to stability issues in Electron. Preview and thumbnail generation use Electron's `nativeImage` instead.
+
 ## Pre-built releases
 
 Pre-built binaries are published on the GitHub Releases page for this repository. Download the version that matches your OS and run it directly.

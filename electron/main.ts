@@ -22,6 +22,7 @@ const APP_NAME = "comfy-browser";
 const APP_DISPLAY_NAME = "Comfy Image Browser";
 const THUMBNAIL_DIR = ".thumbs";
 const THUMBNAIL_SIZE = 320;
+const PREVIEW_MAX_SIZE = 1600;
 const THUMBNAIL_QUEUE_DELAY_MS = 10;
 
 const thumbnailQueue: string[] = [];
@@ -646,6 +647,47 @@ const getCachedThumbnail = async (filePath: string) => {
     }
 };
 
+const getPreviewPath = async (filePath: string) => {
+    const directory = path.dirname(filePath);
+    const fileName = path.basename(filePath);
+    const thumbDir = path.join(directory, THUMBNAIL_DIR);
+    const previewName = `${fileName}.preview.jpg`;
+    const previewPath = path.join(thumbDir, previewName);
+    await fs.mkdir(thumbDir, { recursive: true });
+    return previewPath;
+};
+
+const getCachedPreview = async (filePath: string) => {
+    const previewPath = await getPreviewPath(filePath);
+    try {
+        await fs.access(previewPath);
+        return previewPath;
+    } catch {
+        return null;
+    }
+};
+
+const ensurePreview = async (filePath: string) => {
+    const cached = await getCachedPreview(filePath);
+    if (cached) return cached;
+    const previewPath = await getPreviewPath(filePath);
+    try {
+        const image = nativeImage.createFromPath(filePath);
+        if (image.isEmpty()) {
+            return null;
+        }
+        const resized = image.resize({
+            width: PREVIEW_MAX_SIZE,
+            height: PREVIEW_MAX_SIZE,
+            quality: "good",
+        });
+        await fs.writeFile(previewPath, resized.toJPEG(82));
+        return previewPath;
+    } catch {
+        return null;
+    }
+};
+
 const ensureThumbnail = async (filePath: string) => {
     const cached = await getCachedThumbnail(filePath);
     if (cached) return cached;
@@ -698,6 +740,47 @@ ipcMain.handle("comfy:get-thumbnail", async (_event: IpcMainInvokeEvent, filePat
     enqueueThumbnail(filePath);
     return null;
 });
+
+ipcMain.handle("comfy:get-preview", async (_event: IpcMainInvokeEvent, filePath: string) => {
+    const cached = await getCachedPreview(filePath);
+    if (cached) {
+        return `${COMFY_PROTOCOL}://local?path=${encodeURIComponent(cached)}`;
+    }
+    const preview = await ensurePreview(filePath);
+    if (preview) {
+        return `${COMFY_PROTOCOL}://local?path=${encodeURIComponent(preview)}`;
+    }
+    return null;
+});
+
+ipcMain.handle(
+    "comfy:get-cached-thumbnails",
+    async (
+        _event: IpcMainInvokeEvent,
+        payload: Array<{ id: string; filePath: string }>
+    ) => {
+        if (!Array.isArray(payload) || payload.length === 0) return [];
+        const results = await Promise.all(
+            payload.map(async (item) => {
+                if (!item?.filePath || !item?.id) {
+                    return { id: item?.id ?? "", url: null };
+                }
+                try {
+                    const cached = await getCachedThumbnail(item.filePath);
+                    return cached
+                        ? {
+                              id: item.id,
+                              url: `${COMFY_PROTOCOL}://local?path=${encodeURIComponent(cached)}`,
+                          }
+                        : { id: item.id, url: null };
+                } catch {
+                    return { id: item.id, url: null };
+                }
+            })
+        );
+        return results;
+    }
+);
 
 ipcMain.handle("comfy:reveal-in-folder", async (_event: IpcMainInvokeEvent, filePath: string) => {
     try {

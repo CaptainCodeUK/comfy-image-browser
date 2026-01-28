@@ -7,6 +7,9 @@ contextBridge.exposeInMainWorld("comfy", {
   cancelIndexing: () => ipcRenderer.invoke("comfy:cancel-indexing"),
   toFileUrl: (filePath: string) => ipcRenderer.invoke("comfy:to-file-url", filePath),
   getThumbnail: (filePath: string) => ipcRenderer.invoke("comfy:get-thumbnail", filePath),
+  getPreview: (filePath: string) => ipcRenderer.invoke("comfy:get-preview", filePath),
+  getCachedThumbnails: (payload: Array<{ id: string; filePath: string }>) =>
+    ipcRenderer.invoke("comfy:get-cached-thumbnails", payload),
   showContextMenu: (
     payload:
       | { type: "image"; imageId: string; label: string; selectedCount: number; isSelected: boolean }

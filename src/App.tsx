@@ -7,12 +7,10 @@ import {
   getAppPref,
   getFavorites,
   getImages,
-  getImageViewPrefs,
   removeFavorites,
   removeAlbumById,
   removeImagesById,
   setAppPref,
-  setImageViewPrefs,
   updateAlbumInfo,
   updateImageFileInfo,
 } from "./lib/db";
@@ -70,7 +68,6 @@ const pickString = (value: MetadataValue | undefined) => {
 
 const extractMetadataSummary = (metadata: Record<string, string> | null) => {
   if (!metadata) return null;
-
   const parsedPrompt = parseJsonValue(metadata.prompt);
   const parsedWorkflow = parseJsonValue(metadata.workflow);
   const parsed = (parsedPrompt && typeof parsedPrompt === "object" ? parsedPrompt : {}) as Record<string, MetadataValue>;
@@ -174,8 +171,7 @@ export default function App() {
   const [activeAlbum, setActiveAlbum] = useState<string | "all">("all");
   const [isIndexing, setIsIndexing] = useState(false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
-  const [zoomLevel, setZoomLevel] = useState(1);
-  const [zoomMode, setZoomMode] = useState<ZoomMode>("fit");
+  const [zoomByTab, setZoomByTab] = useState<Record<string, { mode: ZoomMode; level: number }>>({});
   const [viewerSize, setViewerSize] = useState({ width: 0, height: 0 });
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const viewerRef = useRef<HTMLDivElement | null>(null);
@@ -202,6 +198,8 @@ export default function App() {
   const [renameState, setRenameState] = useState<RenameState>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [appInfo, setAppInfo] = useState<{ name: string; version: string } | null>(null);
+  const [metadataSummary, setMetadataSummary] = useState<ReturnType<typeof extractMetadataSummary> | null>(null);
+  const [isImageLoading, setIsImageLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const renameCancelRef = useRef(false);
@@ -209,7 +207,9 @@ export default function App() {
   const thumbnailMapRef = useRef<Record<string, string>>({});
   const thumbnailPendingRef = useRef<Set<string>>(new Set());
   const thumbnailRetryRef = useRef<number | null>(null);
+  const thumbnailTokenRef = useRef(0);
   const [thumbnailRetryTick, setThumbnailRetryTick] = useState(0);
+  const metadataCacheRef = useRef<Map<string, ReturnType<typeof extractMetadataSummary>>>(new Map());
 
   const bridgeAvailable = typeof window !== "undefined" && !!window.comfy;
 
@@ -302,6 +302,52 @@ export default function App() {
     return new Map(images.map((image) => [image.id, image]));
   }, [images]);
 
+  const createdAtMsById = useMemo(() => {
+    return new Map(images.map((image) => [image.id, Date.parse(image.createdAt)]));
+  }, [images]);
+
+  const searchIndex = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const image of images) {
+      const albumName = albumById.get(image.albumId)?.name ?? "";
+      const metaString = image.metadataText ? JSON.stringify(image.metadataText).toLowerCase() : "";
+      map.set(image.id, `${image.fileName.toLowerCase()}|${albumName.toLowerCase()}|${metaString}`);
+    }
+    return map;
+  }, [images, albumById]);
+
+  const sortImages = useCallback(
+    (items: IndexedImage[]) => {
+      const sorted = [...items];
+      sorted.sort((a, b) => {
+        switch (imageSort) {
+          case "name-asc":
+            return a.fileName.localeCompare(b.fileName);
+          case "name-desc":
+            return b.fileName.localeCompare(a.fileName);
+          case "date-asc": {
+            const aTime = createdAtMsById.get(a.id) ?? 0;
+            const bTime = createdAtMsById.get(b.id) ?? 0;
+            return aTime - bTime;
+          }
+          case "date-desc": {
+            const aTime = createdAtMsById.get(a.id) ?? 0;
+            const bTime = createdAtMsById.get(b.id) ?? 0;
+            return bTime - aTime;
+          }
+          case "size-asc":
+            return a.sizeBytes - b.sizeBytes;
+          case "size-desc":
+            return b.sizeBytes - a.sizeBytes;
+          default:
+            return 0;
+        }
+      });
+      return sorted;
+    },
+    [createdAtMsById, imageSort]
+  );
+
   const filteredImages = useMemo(() => {
     const start = performance.now();
     const query = search.trim().toLowerCase();
@@ -313,33 +359,10 @@ export default function App() {
         return false;
       }
       if (!query) return true;
-      const albumName = albumById.get(image.albumId)?.name ?? "";
-      const metaString = JSON.stringify(image.metadataText ?? {}).toLowerCase();
-      return (
-        image.fileName.toLowerCase().includes(query) ||
-        albumName.toLowerCase().includes(query) ||
-        metaString.includes(query)
-      );
+      const searchText = searchIndex.get(image.id) ?? "";
+      return searchText.includes(query);
     });
-    const sorted = [...visible];
-    sorted.sort((a, b) => {
-      switch (imageSort) {
-        case "name-asc":
-          return a.fileName.localeCompare(b.fileName);
-        case "name-desc":
-          return b.fileName.localeCompare(a.fileName);
-        case "date-asc":
-          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-        case "date-desc":
-          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-        case "size-asc":
-          return a.sizeBytes - b.sizeBytes;
-        case "size-desc":
-          return b.sizeBytes - a.sizeBytes;
-        default:
-          return 0;
-      }
-    });
+    const sorted = sortImages(visible);
     const duration = performance.now() - start;
     if (duration > 50) {
       console.log("[comfy-browser] Filter/sort cost", {
@@ -349,7 +372,7 @@ export default function App() {
       });
     }
     return sorted;
-  }, [images, search, albumById, activeAlbum, imageSort, favoriteIds]);
+  }, [images, search, activeAlbum, favoriteIds, searchIndex, sortImages]);
 
   const selectedImages = filteredImages.filter((image) => selectedIds.has(image.id));
 
@@ -362,6 +385,10 @@ export default function App() {
   const albumHighlightId = albumIdForNav;
 
   const albumSortedImages = useMemo(() => {
+    const trimmedQuery = search.trim();
+    if (!trimmedQuery && albumIdForNav === activeAlbum) {
+      return filteredImages;
+    }
     const visible = images.filter((image) => {
       if (albumIdForNav === FAVORITES_ID && !favoriteIds.has(image.id)) {
         return false;
@@ -371,27 +398,8 @@ export default function App() {
       }
       return true;
     });
-    const sorted = [...visible];
-    sorted.sort((a, b) => {
-      switch (imageSort) {
-        case "name-asc":
-          return a.fileName.localeCompare(b.fileName);
-        case "name-desc":
-          return b.fileName.localeCompare(a.fileName);
-        case "date-asc":
-          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-        case "date-desc":
-          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-        case "size-asc":
-          return a.sizeBytes - b.sizeBytes;
-        case "size-desc":
-          return b.sizeBytes - a.sizeBytes;
-        default:
-          return 0;
-      }
-    });
-    return sorted;
-  }, [images, albumIdForNav, imageSort, favoriteIds, activeAlbum]);
+    return sortImages(visible);
+  }, [images, albumIdForNav, favoriteIds, activeAlbum, filteredImages, search, sortImages]);
 
   const navigationImages = useMemo(() => {
     if (activeTab.type === "image" && search.trim()) {
@@ -557,6 +565,23 @@ export default function App() {
     [bridgeAvailable]
   );
 
+  const applyResolvedTabUrls = useCallback((updates: IndexedImage[]) => {
+    if (updates.length === 0) return;
+    const updateMap = new Map(updates.map((entry) => [entry.id, entry.fileUrl]));
+    setTabs((prev) =>
+      prev.map((tab) => {
+        if (tab.type !== "image") return tab;
+        const nextUrl = updateMap.get(tab.image.id);
+        return nextUrl ? { ...tab, image: { ...tab.image, fileUrl: nextUrl } } : tab;
+      })
+    );
+    setActiveTab((current) => {
+      if (current.type !== "image") return current;
+      const nextUrl = updateMap.get(current.image.id);
+      return nextUrl ? { ...current, image: { ...current.image, fileUrl: nextUrl } } : current;
+    });
+  }, []);
+
   const resolveFileUrlsForTabs = useCallback(
     async (imagesToOpen: IndexedImage[]) => {
       if (!bridgeAvailable) return imagesToOpen;
@@ -569,13 +594,6 @@ export default function App() {
           } catch {
             return image;
           }
-        })
-      );
-
-      setImages((prev) =>
-        prev.map((image) => {
-          const updated = updates.find((entry: IndexedImage) => entry.id === image.id);
-          return updated ? { ...image, fileUrl: updated.fileUrl } : image;
         })
       );
 
@@ -637,7 +655,70 @@ export default function App() {
 
   useEffect(() => {
     if (!bridgeAvailable) return;
+    thumbnailTokenRef.current += 1;
+  }, [bridgeAvailable, visibleImages]);
+
+
+  useEffect(() => {
+    if (!bridgeAvailable || !window.comfy?.getCachedThumbnails) return;
     let cancelled = false;
+    const token = thumbnailTokenRef.current;
+
+    const prefill = async () => {
+      const currentMap = thumbnailMapRef.current;
+      const missing = visibleImages.filter((image) => !currentMap[image.id]);
+      if (!missing.length) return;
+
+      const results = await window.comfy.getCachedThumbnails(
+        missing.map((image) => ({ id: image.id, filePath: image.filePath }))
+      );
+
+      if (cancelled || token !== thumbnailTokenRef.current) return;
+
+      setThumbnailMap((prev) => {
+        const next = { ...prev };
+        for (const result of results) {
+          if (result.url) {
+            next[result.id] = result.url;
+          }
+        }
+        return next;
+      });
+    };
+
+    void prefill();
+    return () => {
+      cancelled = true;
+    };
+  }, [bridgeAvailable, visibleImages]);
+
+  useEffect(() => {
+    if (!bridgeAvailable || activeTab.type !== "image") return;
+    const image = activeTab.image;
+    if (image.fileUrl !== image.filePath) return;
+    let cancelled = false;
+
+    const resolve = async () => {
+      if (!window.comfy?.toFileUrl) return;
+      try {
+        const fileUrl = await window.comfy.toFileUrl(image.filePath);
+        if (cancelled) return;
+        applyResolvedTabUrls([{ ...image, fileUrl }]);
+      } catch {
+        // ignore resolve failure
+      }
+    };
+
+    void resolve();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, bridgeAvailable, applyResolvedTabUrls]);
+
+  useEffect(() => {
+    if (!bridgeAvailable) return;
+    let cancelled = false;
+    const token = thumbnailTokenRef.current;
     type IdleHandle = ReturnType<typeof globalThis.setTimeout> | number;
     let idleId: IdleHandle | null = null;
 
@@ -659,6 +740,7 @@ export default function App() {
     const scheduleRetry = () => {
       if (thumbnailRetryRef.current) return;
       thumbnailRetryRef.current = window.setTimeout(() => {
+        if (token !== thumbnailTokenRef.current) return;
         thumbnailRetryRef.current = null;
         setThumbnailRetryTick((tick) => tick + 1);
       }, THUMBNAIL_RETRY_MS);
@@ -675,28 +757,48 @@ export default function App() {
         batch: Math.min(THUMBNAIL_BATCH_SIZE, missing.length),
       });
 
-      for (const image of missing.slice(0, THUMBNAIL_BATCH_SIZE)) {
-        if (thumbnailPendingRef.current.has(image.id)) continue;
+      const batch = missing.slice(0, THUMBNAIL_BATCH_SIZE).filter((image) => {
+        if (token !== thumbnailTokenRef.current || cancelled) return false;
+        if (thumbnailPendingRef.current.has(image.id)) return false;
         thumbnailPendingRef.current.add(image.id);
+        return true;
+      });
 
-        try {
-          const url = await window.comfy.getThumbnail(image.filePath);
-          if (cancelled) return;
+      if (!batch.length) return;
 
-          thumbnailPendingRef.current.delete(image.id);
-          if (url) {
-            setThumbnailMap((prev) => ({ ...prev, [image.id]: url }));
-          } else {
-            scheduleRetry();
+      const results = await Promise.all(
+        batch.map(async (image) => {
+          try {
+            const url = await window.comfy.getThumbnail(image.filePath);
+            return { id: image.id, url };
+          } catch (error) {
+            console.log("[comfy-browser] Thumbnail fetch failed", {
+              filePath: image.filePath,
+              error,
+            });
+            return { id: image.id, url: null };
           }
-        } catch (error) {
-          thumbnailPendingRef.current.delete(image.id);
-          console.log("[comfy-browser] Thumbnail fetch failed", {
-            filePath: image.filePath,
-            error,
-          });
-          scheduleRetry();
+        })
+      );
+
+      if (cancelled || token !== thumbnailTokenRef.current) return;
+
+      let shouldRetry = false;
+      setThumbnailMap((prev) => {
+        const next = { ...prev };
+        for (const result of results) {
+          thumbnailPendingRef.current.delete(result.id);
+          if (result.url) {
+            next[result.id] = result.url;
+          } else {
+            shouldRetry = true;
+          }
         }
+        return next;
+      });
+
+      if (shouldRetry) {
+        scheduleRetry();
       }
     };
 
@@ -708,6 +810,11 @@ export default function App() {
       if (idleId !== null) {
         cancelIdle(idleId);
       }
+      if (thumbnailRetryRef.current) {
+        window.clearTimeout(thumbnailRetryRef.current);
+        thumbnailRetryRef.current = null;
+      }
+      thumbnailPendingRef.current.clear();
     };
   }, [visibleImages, bridgeAvailable, thumbnailRetryTick]);
 
@@ -733,10 +840,9 @@ export default function App() {
   };
 
   const handleOpenImages = async (imagesToOpen: IndexedImage[]) => {
-    const resolvedImages = await resolveFileUrlsForTabs(imagesToOpen);
     setTabs((prev) => {
       const existingIds = new Set(prev.map((tab) => tab.id));
-      const additions = resolvedImages
+      const additions = imagesToOpen
         .filter((image: IndexedImage) => !existingIds.has(image.id))
         .map((image: IndexedImage) => ({
           id: image.id,
@@ -747,24 +853,24 @@ export default function App() {
       return [LibraryTab, ...prev.filter((tab) => tab.id !== "library"), ...additions];
     });
     setActiveTab((current) => {
-      if (resolvedImages.length === 1) {
+      if (imagesToOpen.length === 1) {
         return {
-          id: resolvedImages[0].id,
-          title: resolvedImages[0].fileName,
+          id: imagesToOpen[0].id,
+          title: imagesToOpen[0].fileName,
           type: "image" as const,
-          image: resolvedImages[0],
+          image: imagesToOpen[0],
         };
       }
       return current;
     });
+
+    const resolvedImages = await resolveFileUrlsForTabs(imagesToOpen);
+    applyResolvedTabUrls(resolvedImages);
   };
 
   const handleNavigateImage = async (target: IndexedImage) => {
-    const [resolved] = await resolveFileUrlsForTabs([target]);
-    if (!resolved) return;
-
     if (activeTab.type !== "image") {
-      await handleOpenImages([resolved]);
+      await handleOpenImages([target]);
       return;
     }
 
@@ -775,19 +881,23 @@ export default function App() {
         tab.id === currentTabId
           ? {
               id: currentTabId,
-              title: resolved.fileName,
+              title: target.fileName,
               type: "image" as const,
-              image: resolved,
+              image: target,
             }
           : tab
       )
     );
     setActiveTab({
       id: currentTabId,
-      title: resolved.fileName,
+      title: target.fileName,
       type: "image" as const,
-      image: resolved,
+      image: target,
     });
+
+    const [resolved] = await resolveFileUrlsForTabs([target]);
+    if (!resolved) return;
+    applyResolvedTabUrls([resolved]);
   };
 
   useEffect(() => {
@@ -1063,6 +1173,11 @@ export default function App() {
       type: "image",
       image: activeTab.image,
     };
+
+    setZoomByTab((prev) => {
+      const current = prev[activeTab.id] ?? { mode: "fit", level: 1 };
+      return { ...prev, [duplicateId]: { ...current } };
+    });
 
     setTabs((prev) => {
       const index = prev.findIndex((tab) => tab.id === activeTab.id);
@@ -1999,33 +2114,35 @@ export default function App() {
     return activeTab.image;
   }, [activeTab]);
 
-  useEffect(() => {
-    const loadPrefs = async () => {
-      if (activeTab.type !== "image") {
-        setZoomMode("fit");
-        setZoomLevel(1);
-        return;
-      }
-      const prefs = await getImageViewPrefs(activeTab.id);
-      if (!prefs) {
-        setZoomMode("fit");
-        setZoomLevel(1);
-        return;
-      }
-      setZoomMode(prefs.zoomMode);
-      setZoomLevel(prefs.zoomLevel);
-    };
-
-    loadPrefs();
-  }, [activeTab.id, activeTab.type]);
+  const activeImageId = activeTab.type === "image" ? activeTab.image.id : null;
 
   useEffect(() => {
+    if (activeTab.type !== "image") {
+      setIsImageLoading(false);
+      return;
+    }
+    setIsImageLoading(true);
+  }, [activeTab.type, activeTabContent?.fileUrl]);
+
+  const activeZoom = activeTab.type === "image"
+    ? zoomByTab[activeTab.id] ?? { mode: "fit", level: 1 }
+    : { mode: "fit", level: 1 };
+
+  const setActiveZoomMode = (mode: ZoomMode) => {
     if (activeTab.type !== "image") return;
-    const timeout = window.setTimeout(() => {
-      void setImageViewPrefs(activeTab.id, zoomMode, zoomLevel);
-    }, 200);
-    return () => window.clearTimeout(timeout);
-  }, [activeTab.id, activeTab.type, zoomMode, zoomLevel]);
+    setZoomByTab((prev) => {
+      const current = prev[activeTab.id] ?? { mode: "fit", level: 1 };
+      return { ...prev, [activeTab.id]: { ...current, mode } };
+    });
+  };
+
+  const setActiveZoomLevel = (level: number) => {
+    if (activeTab.type !== "image") return;
+    setZoomByTab((prev) => ({
+      ...prev,
+      [activeTab.id]: { mode: "manual", level },
+    }));
+  };
 
   useEffect(() => {
     const target = viewerRef.current;
@@ -2049,24 +2166,61 @@ export default function App() {
   }, [activeTab.id]);
 
   const derivedZoom = useMemo(() => {
-    if (zoomMode === "manual") return zoomLevel;
-    if (zoomMode === "actual") return 1;
+    if (activeZoom.mode === "manual") return activeZoom.level;
+    if (activeZoom.mode === "actual") return 1;
     if (!imageSize.width || !imageSize.height || !viewerSize.width || !viewerSize.height) {
       return 1;
     }
     const widthScale = viewerSize.width / imageSize.width;
     const heightScale = viewerSize.height / imageSize.height;
-    if (zoomMode === "width") return widthScale;
-    if (zoomMode === "height") return heightScale;
+    if (activeZoom.mode === "width") return widthScale;
+    if (activeZoom.mode === "height") return heightScale;
     return Math.min(widthScale, heightScale);
-  }, [zoomMode, zoomLevel, imageSize, viewerSize]);
+  }, [activeZoom.mode, activeZoom.level, imageSize, viewerSize]);
+
+  const viewerSizingClass = useMemo(() => {
+    if (activeZoom.mode === "fit") return "max-h-full max-w-full";
+    if (activeZoom.mode === "width") return "w-full h-auto";
+    if (activeZoom.mode === "height") return "h-full w-auto";
+    return "h-auto w-auto";
+  }, [activeZoom.mode]);
 
   useEffect(() => {
-    const value = zoomMode === "manual" ? zoomLevel : 1;
+    const value = activeZoom.mode === "manual" ? activeZoom.level : 1;
     document.documentElement.style.setProperty("--viewer-zoom", `${value}`);
-  }, [zoomMode, zoomLevel]);
+  }, [activeZoom.mode, activeZoom.level]);
 
-  const metadataSummary = activeTab.type === "image" ? extractMetadataSummary(activeTab.image.metadataText) : null;
+  useEffect(() => {
+    if (activeTab.type !== "image") {
+      setMetadataSummary(null);
+      return;
+    }
+    const cached = metadataCacheRef.current.get(activeTab.image.id);
+    if (cached) {
+      setMetadataSummary(cached);
+      return;
+    }
+    setMetadataSummary(null);
+    let cancelled = false;
+    const compute = () => {
+      if (cancelled) return;
+      const summary = extractMetadataSummary(activeTab.image.metadataText);
+      metadataCacheRef.current.set(activeTab.image.id, summary);
+      setMetadataSummary(summary);
+    };
+    if ("requestIdleCallback" in window) {
+      const id = (window as Window & { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(compute);
+      return () => {
+        cancelled = true;
+        (window as Window & { cancelIdleCallback: (cb: number) => void }).cancelIdleCallback(id);
+      };
+    }
+    const timeout = globalThis.setTimeout(compute, 0);
+    return () => {
+      cancelled = true;
+      globalThis.clearTimeout(timeout);
+    };
+  }, [activeTab.type, activeImageId]);
 
   useEffect(() => {
     const node = tabRefs.current[activeTab.id];
@@ -2735,42 +2889,46 @@ export default function App() {
                   <img
                     src={activeTabContent.fileUrl}
                     alt={activeTabContent.fileName}
-                    className={`viewer-image object-contain ${
-                      zoomMode === "fit"
-                        ? "max-h-full max-w-full"
-                        : zoomMode === "width"
-                        ? "w-full h-auto"
-                        : zoomMode === "height"
-                        ? "h-full w-auto"
-                        : "h-auto w-auto"
-                    }`}
+                    decoding="async"
+                    loading="eager"
+                    className={`viewer-image object-contain ${viewerSizingClass}`}
                     onLoad={(event) => {
                       const target = event.currentTarget;
                       setImageSize({ width: target.naturalWidth, height: target.naturalHeight });
+                      setIsImageLoading(false);
                     }}
+                    onError={() => setIsImageLoading(false)}
                   />
+                  {isImageLoading ? (
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                      <div className="flex items-center gap-2 rounded-full border border-slate-700 bg-slate-950/70 px-3 py-2 text-xs text-slate-200 shadow">
+                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
+                        Loading image…
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="absolute bottom-4 right-4 flex flex-col items-end gap-3 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-xs text-slate-200 shadow-lg">
                     <div className="flex flex-wrap justify-end gap-2">
                       <button
-                        onClick={() => setZoomMode("fit")}
+                        onClick={() => setActiveZoomMode("fit")}
                         className="rounded-md border border-slate-700 px-2 py-1"
                       >
                         Fit
                       </button>
                       <button
-                        onClick={() => setZoomMode("actual")}
+                        onClick={() => setActiveZoomMode("actual")}
                         className="rounded-md border border-slate-700 px-2 py-1"
                       >
                         100%
                       </button>
                       <button
-                        onClick={() => setZoomMode("width")}
+                        onClick={() => setActiveZoomMode("width")}
                         className="rounded-md border border-slate-700 px-2 py-1"
                       >
                         Fit width
                       </button>
                       <button
-                        onClick={() => setZoomMode("height")}
+                        onClick={() => setActiveZoomMode("height")}
                         className="rounded-md border border-slate-700 px-2 py-1"
                       >
                         Fit height
@@ -2785,8 +2943,7 @@ export default function App() {
                         step={0.1}
                         value={derivedZoom}
                         onChange={(event) => {
-                          setZoomMode("manual");
-                          setZoomLevel(Number(event.target.value));
+                          setActiveZoomLevel(Number(event.target.value));
                         }}
                         aria-label="Zoom image"
                       />
