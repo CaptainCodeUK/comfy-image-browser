@@ -743,6 +743,16 @@ export default function App() {
         handleDuplicateTab();
         return;
       }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w" && event.shiftKey) {
+        event.preventDefault();
+        handleCloseOtherTabs(activeTab.id);
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w" && event.altKey) {
+        event.preventDefault();
+        handleCloseAllTabs();
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w") {
         event.preventDefault();
         if (activeTab.id !== "library") {

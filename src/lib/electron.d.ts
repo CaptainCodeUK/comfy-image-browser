@@ -21,6 +21,7 @@ declare global {
         | "delete-selected-images-disk"
         | "delete-selected-albums-disk"
         | "reveal-image"
+  | "edit-image"
         | "reveal-album"
         | "rescan-album"
         | "select-all-images"
