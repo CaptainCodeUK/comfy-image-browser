@@ -42,6 +42,7 @@ declare global {
       }) => Promise<{ deletedPaths: string[]; canceled: boolean }>;
       revealInFolder: (filePath: string) => Promise<void>;
       openInEditor: (filePath: string) => Promise<void>;
+      findMissingFiles: (paths: string[]) => Promise<string[]>;
       updateMenuState: (state: {
         hasActiveImage: boolean;
         hasActiveAlbum: boolean;

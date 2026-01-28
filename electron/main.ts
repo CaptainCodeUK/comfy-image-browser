@@ -196,7 +196,7 @@ const buildAppMenu = () => {
       { type: "separator" },
       {
         id: "menu-remove-selected-albums",
-        label: "Remove Selected Albums from Index",
+        label: "Remove Selected Albums from Index…",
         enabled: false,
         click: () => sendMenuAction("remove-selected-albums"),
       },
@@ -249,7 +249,7 @@ const buildAppMenu = () => {
       { type: "separator" },
       {
         id: "menu-remove-selected-images",
-        label: "Remove Selected Images from Index",
+        label: "Remove Selected Images from Index…",
         enabled: false,
         click: () => sendMenuAction("remove-selected-images"),
       },
@@ -321,25 +321,25 @@ const buildAppMenu = () => {
     ],
   });
 
-  template.push({
-    label: "View",
-    submenu: [
-      { role: "reload" },
-      { role: "forceReload" },
-      { role: "toggleDevTools" },
-      { type: "separator" },
-      { role: "resetZoom" },
-      { role: "zoomIn" },
-      { role: "zoomOut" },
-      { type: "separator" },
-      { role: "togglefullscreen" },
-    ],
-  });
+//   template.push({
+//     label: "View",
+//     submenu: [
+//       { role: "reload" },
+//       { role: "forceReload" },
+//       { role: "toggleDevTools" },
+//       { type: "separator" },
+//       { role: "resetZoom" },
+//       { role: "zoomIn" },
+//       { role: "zoomOut" },
+//       { type: "separator" },
+//       { role: "togglefullscreen" },
+//     ],
+//   });
 
-  template.push({
-    label: "Window",
-    submenu: [{ role: "minimize" }, { role: "close" }],
-  });
+//   template.push({
+//     label: "Window",
+//     submenu: [{ role: "minimize" }, { role: "close" }],
+//   });
 
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
@@ -668,6 +668,14 @@ ipcMain.handle("comfy:open-in-editor", async (_event: IpcMainInvokeEvent, filePa
   await shell.openPath(filePath);
 });
 
+ipcMain.handle("comfy:find-missing-files", async (_event: IpcMainInvokeEvent, filePaths: string[]) => {
+  if (!Array.isArray(filePaths) || filePaths.length === 0) {
+    return [] as string[];
+  }
+  const checks = await Promise.allSettled(filePaths.map((filePath) => fs.access(filePath)));
+  return filePaths.filter((_path, index) => checks[index].status === "rejected");
+});
+
 ipcMain.on(
   "comfy:update-menu-state",
   (
@@ -795,20 +803,22 @@ ipcMain.handle(
           click: () => finish("edit-image"),
         });
         items.push({
-          label: `Remove ${payload.label} from index`,
+          label: `Remove ${payload.label} from Index…`,
           click: () => finish("remove-image"),
         });
+        if (payload.selectedCount > 1) {
+          items.push({
+            label: `Remove Selected Images from Index (${payload.selectedCount})…`,
+            click: () => finish("remove-selected-images"),
+          });
+        }
         items.push({
-          label: `Delete ${payload.label} from disk…`,
+          label: `Delete ${payload.label} from Disk…`,
           click: () => finish("delete-image-disk"),
         });
         if (payload.selectedCount > 1) {
           items.push({
-            label: `Remove selected images (${payload.selectedCount})`,
-            click: () => finish("remove-selected-images"),
-          });
-          items.push({
-            label: `Delete selected images (${payload.selectedCount}) from disk…`,
+            label: `Delete Selected Images (${payload.selectedCount}) from Disk…`,
             click: () => finish("delete-selected-images-disk"),
           });
         }
@@ -837,20 +847,22 @@ ipcMain.handle(
           click: () => finish("rescan-album"),
         });
         items.push({
-          label: `Remove ${payload.label} from index`,
+          label: `Remove ${payload.label} from Index…`,
           click: () => finish("remove-album"),
         });
+        if (payload.selectedCount > 1) {
+          items.push({
+            label: `Remove Selected Albums from Index (${payload.selectedCount})…`,
+            click: () => finish("remove-selected-albums"),
+          });
+        }
         items.push({
-          label: `Delete ${payload.label} images from disk…`,
+          label: `Delete ${payload.label} Images from Disk…`,
           click: () => finish("delete-album-disk"),
         });
         if (payload.selectedCount > 1) {
           items.push({
-            label: `Remove selected albums (${payload.selectedCount})`,
-            click: () => finish("remove-selected-albums"),
-          });
-          items.push({
-            label: `Delete selected albums (${payload.selectedCount}) from disk…`,
+            label: `Delete Selected Albums (${payload.selectedCount}) from Disk…`,
             click: () => finish("delete-selected-albums-disk"),
           });
         }

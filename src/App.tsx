@@ -911,8 +911,20 @@ export default function App() {
     });
   };
 
-  const handleRemoveImages = async (ids: string[]) => {
+  const handleRemoveImages = async (
+    ids: string[],
+    options: {
+      confirm?: boolean;
+      label?: string;
+    } = {}
+  ) => {
     if (ids.length === 0) return;
+    const shouldConfirm = options.confirm ?? true;
+    if (shouldConfirm) {
+      const label = options.label ?? (ids.length === 1 ? "this image" : `${ids.length} images`);
+      const confirmed = window.confirm(`Remove ${label} from the index?`);
+      if (!confirmed) return;
+    }
     const idSet = new Set(ids);
     await removeImagesById(ids);
     setImages((prev) => prev.filter((image) => !idSet.has(image.id)));
@@ -927,7 +939,7 @@ export default function App() {
 
   const handleRemoveSelected = async () => {
     if (selectedIds.size === 0) return;
-    await handleRemoveImages(Array.from(selectedIds));
+    await handleRemoveImages(Array.from(selectedIds), { label: `${selectedIds.size} selected images` });
   };
 
   const removeAlbumFromIndex = async (albumId: string) => {
@@ -1061,7 +1073,7 @@ export default function App() {
     const deletedPathSet = new Set(result.deletedPaths);
     const deletedIds = ids.filter((id) => deletedPathSet.has(imageById.get(id)?.filePath ?? ""));
     if (!deletedIds.length) return [];
-    await handleRemoveImages(deletedIds);
+    await handleRemoveImages(deletedIds, { confirm: false });
     return deletedIds;
   };
 
@@ -1176,6 +1188,12 @@ export default function App() {
     }
   };
 
+  const getPathSeparator = (value: string) => (value.includes("\\") ? "\\" : "/");
+  const ensureTrailingSeparator = (value: string) =>
+    value.endsWith("/") || value.endsWith("\\") ? value : `${value}${getPathSeparator(value)}`;
+  const isPathWithinRoot = (candidate: string, root: string) =>
+    candidate === root || candidate.startsWith(ensureTrailingSeparator(root));
+
   const handleRescanAlbums = async (albumIds: string[]) => {
     if (!bridgeAvailable || !window.comfy?.indexFolders) return;
     const targets = albums.filter((album) => albumIds.includes(album.id));
@@ -1187,10 +1205,24 @@ export default function App() {
     setFolderProgress(null);
     setImageProgress(null);
     try {
+      const targetImageList = images.filter((image) => targets.some((album) => album.id === image.albumId));
+      const missingPaths = window.comfy?.findMissingFiles
+        ? await window.comfy.findMissingFiles(targetImageList.map((image) => image.filePath))
+        : [];
+      const missingPathSet = new Set(missingPaths);
+      if (missingPathSet.size > 0) {
+        const missingIds = targetImageList
+          .filter((image) => missingPathSet.has(image.filePath))
+          .map((image) => image.id);
+        await handleRemoveImages(missingIds, { confirm: false });
+      }
       const rootPaths = targets.map((album) => album.rootPath);
+      const imagesForIndex = missingPathSet.size > 0
+        ? images.filter((image) => !missingPathSet.has(image.filePath))
+        : images;
       const payload = (await window.comfy.indexFolders(
         rootPaths,
-        images.map((image) => image.filePath)
+        imagesForIndex.map((image) => image.filePath)
       )) as Array<{
         rootPath: string;
         images: IndexedImagePayload[];
@@ -1244,16 +1276,31 @@ export default function App() {
       if (!folderPaths.length) {
         return;
       }
-      const existingRoots = new Set(albums.map((album) => album.rootPath));
-      const uniquePaths = Array.from(new Set(folderPaths)).filter((path) => !existingRoots.has(path));
+      const uniquePaths = Array.from(new Set(folderPaths));
       if (uniquePaths.length === 0) {
-        setToastMessage("Folders already indexed");
-        setLastCopied("Folders already indexed");
         return;
       }
+      const affectedAlbums = albums.filter((album) =>
+        uniquePaths.some((rootPath) => isPathWithinRoot(album.rootPath, rootPath))
+      );
+      const affectedAlbumIds = new Set(affectedAlbums.map((album) => album.id));
+      const affectedImages = images.filter((image) => affectedAlbumIds.has(image.albumId));
+      const missingPaths = window.comfy?.findMissingFiles
+        ? await window.comfy.findMissingFiles(affectedImages.map((image) => image.filePath))
+        : [];
+      const missingPathSet = new Set(missingPaths);
+      if (missingPathSet.size > 0) {
+        const missingIds = affectedImages
+          .filter((image) => missingPathSet.has(image.filePath))
+          .map((image) => image.id);
+        await handleRemoveImages(missingIds, { confirm: false });
+      }
+      const imagesForIndex = missingPathSet.size > 0
+        ? images.filter((image) => !missingPathSet.has(image.filePath))
+        : images;
       const payload = (await window.comfy.indexFolders(
         uniquePaths,
-        images.map((image) => image.filePath)
+        imagesForIndex.map((image) => image.filePath)
       )) as Array<{
         rootPath: string;
         images: IndexedImagePayload[];
@@ -1264,33 +1311,42 @@ export default function App() {
       }
 
       const existingFilePaths = new Set(images.map((image) => image.filePath));
-      const filteredPayload = payload
-        .filter((albumPayload) => !existingRoots.has(albumPayload.rootPath))
-        .map((albumPayload) => ({
-          ...albumPayload,
-          images: albumPayload.images.filter((image) => !existingFilePaths.has(image.filePath)),
-        }))
-        .filter((albumPayload) => albumPayload.images.length > 0);
+      const albumByRoot = new Map(albums.map((album) => [album.rootPath, album]));
+      const newAlbums: Album[] = [];
+      const newImages: IndexedImage[] = [];
 
-      if (filteredPayload.length === 0) {
+      for (const albumPayload of payload) {
+        const filtered = albumPayload.images.filter((image) => !existingFilePaths.has(image.filePath));
+        if (filtered.length === 0) continue;
+        filtered.forEach((image) => existingFilePaths.add(image.filePath));
+
+        const existingAlbum = albumByRoot.get(albumPayload.rootPath);
+        if (existingAlbum) {
+          const added = await addImagesToAlbum(existingAlbum.id, filtered);
+          newImages.push(...added);
+          continue;
+        }
+
+        const result = await addAlbumWithImages(albumPayload.rootPath, filtered);
+        newAlbums.push(result.album);
+        newImages.push(...result.images);
+      }
+
+      if (newAlbums.length === 0 && newImages.length === 0) {
         setToastMessage("No new images to add");
         setLastCopied("No new images to add");
         return;
       }
 
-      const results = await Promise.all(
-        filteredPayload.map(async (albumPayload): Promise<{ album: Album; images: IndexedImage[] }> => {
-          return addAlbumWithImages(albumPayload.rootPath, albumPayload.images);
-        })
-      );
-
-      const newAlbums = results.flatMap((result) => result.album);
-      const newImages = results.flatMap((result) => result.images);
       const baseImages = newImages.map((image) => ({ ...image, fileUrl: image.filePath }));
 
-      setAlbums((prev) => [...prev, ...newAlbums]);
-      setImages((prev) => [...prev, ...baseImages]);
-      hydrateFileUrls(baseImages);
+      if (newAlbums.length > 0) {
+        setAlbums((prev) => [...prev, ...newAlbums]);
+      }
+      if (baseImages.length > 0) {
+        setImages((prev) => [...prev, ...baseImages]);
+        hydrateFileUrls(baseImages);
+      }
     } finally {
       setIsIndexing(false);
     }

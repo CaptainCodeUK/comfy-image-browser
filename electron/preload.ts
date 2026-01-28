@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld("comfy", {
     ipcRenderer.invoke("comfy:delete-files-from-disk", payload),
   revealInFolder: (filePath: string) => ipcRenderer.invoke("comfy:reveal-in-folder", filePath),
   openInEditor: (filePath: string) => ipcRenderer.invoke("comfy:open-in-editor", filePath),
+  findMissingFiles: (paths: string[]) => ipcRenderer.invoke("comfy:find-missing-files", paths),
   updateMenuState: (state: {
     hasActiveImage: boolean;
     hasActiveAlbum: boolean;
