@@ -6,7 +6,8 @@ declare global {
       selectFolders: () => Promise<string[]>;
       indexFolders: (
         paths: string[],
-        existingPaths?: string[]
+        existingPaths?: string[],
+        options?: { returnPayload?: boolean }
       ) => Promise<Array<{ rootPath: string; images: IndexedImagePayload[] }>>;
       cancelIndexing: () => Promise<void>;
       toFileUrl: (filePath: string) => Promise<string>;
@@ -66,6 +67,9 @@ declare global {
         hasSingleSelectedAlbum: boolean;
         hasImages: boolean;
         hasAlbums: boolean;
+        isIndexing: boolean;
+        isRemoving: boolean;
+        isDeleting: boolean;
       }) => void;
       onMenuAction: (
         callback: (

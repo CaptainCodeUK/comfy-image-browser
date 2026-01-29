@@ -12,6 +12,7 @@ import {
 } from "electron";
 import path from "node:path";
 import fs from "node:fs/promises";
+import { Worker } from "node:worker_threads";
 import { parsePngMetadata, readPngDimensions, type ParsedPngMetadata } from "../src/lib/pngMetadata";
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".dib"]);
@@ -28,7 +29,12 @@ const THUMBNAIL_QUEUE_DELAY_MS = 10;
 const thumbnailQueue: string[] = [];
 const thumbnailInFlight = new Set<string>();
 let thumbnailQueueRunning = false;
-const indexingCancels = new Map<number, { cancelled: boolean }>();
+const indexingCancels = new Map<number, { cancelled: boolean; worker?: Worker }>();
+const menuLocks = {
+    isIndexing: false,
+    isRemoving: false,
+    isDeleting: false,
+};
 
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_NAME);
@@ -171,6 +177,7 @@ const buildAppMenu = () => {
         label: "File",
         submenu: [
             {
+                id: "menu-add-folder",
                 label: "Add Folder…",
                 accelerator: "CmdOrCtrl+O",
                 click: () => sendMenuAction("add-folder"),
@@ -423,12 +430,17 @@ app.whenReady().then(async () => {
     protocol.registerFileProtocol(COMFY_PROTOCOL, (request, callback) => {
         try {
             const url = new URL(request.url);
-            const encodedPath = url.searchParams.get("path");
-            if (!encodedPath) {
+            const rawPath = url.searchParams.get("path") ?? (url.pathname && url.pathname !== "/" ? url.pathname : "");
+            if (!rawPath) {
                 callback({ error: -6 });
                 return;
             }
-            const decodedPath = decodeURIComponent(encodedPath);
+            let decodedPath = rawPath;
+            try {
+                decodedPath = decodeURIComponent(rawPath);
+            } catch {
+                decodedPath = rawPath;
+            }
             callback({ path: decodedPath });
         } catch {
             callback({ error: -6 });
@@ -546,79 +558,91 @@ ipcMain.handle("comfy:select-folders", async () => {
 
 ipcMain.handle(
     "comfy:index-folders",
-    async (_event: IpcMainInvokeEvent, rootPaths: string[], existingPaths: string[] = []) => {
-        const existingFiles = new Set(existingPaths);
-        const cancelToken = { cancelled: false };
+    async (
+        _event: IpcMainInvokeEvent,
+        rootPaths: string[],
+        existingPaths: string[] = [],
+        options: { returnPayload?: boolean } = {}
+    ) => {
+        const cancelToken = { cancelled: false, worker: undefined as Worker | undefined };
         indexingCancels.set(_event.sender.id, cancelToken);
-        const albums: Array<{ rootPath: string; images: IndexedImagePayload[] }> = [];
-        const scans = await Promise.all(rootPaths.map((rootPath) => scanFolderTree(rootPath, existingFiles)));
-        const albumFolders: Array<{ rootPath: string; folderPath: string; files: string[] }> = [];
+        const worker = new Worker(path.join(__dirname, "indexingWorker.js"));
+        cancelToken.worker = worker;
+        const returnPayload = options.returnPayload ?? true;
 
-        for (let i = 0; i < rootPaths.length; i += 1) {
-            const rootPath = rootPaths[i];
-            const files = scans[i].files;
-            const folderMap = new Map<string, string[]>();
-
-            for (const filePath of files) {
-                const folder = path.dirname(filePath);
-                const existing = folderMap.get(folder);
-                if (existing) {
-                    existing.push(filePath);
-                } else {
-                    folderMap.set(folder, [filePath]);
-                }
-            }
-
-            for (const [folderPath, folderFiles] of folderMap.entries()) {
-                if (!folderFiles.length) continue;
-                albumFolders.push({ rootPath: folderPath, folderPath, files: folderFiles });
-            }
-        }
-
-        const totalImages = albumFolders.reduce((sum, album) => sum + album.files.length, 0);
-        let folderIndex = 0;
-        let imageIndex = 0;
-
-        for (const albumFolder of albumFolders) {
-            if (cancelToken.cancelled) {
-                _event.sender.send("comfy:indexing-complete");
+        return await new Promise<Array<{ rootPath: string; images: IndexedImagePayload[] }>>((resolve) => {
+            const albums: Array<{ rootPath: string; images: IndexedImagePayload[] }> = [];
+            const cleanup = () => {
+                worker.removeAllListeners();
+                worker.terminate();
                 indexingCancels.delete(_event.sender.id);
-                return [];
-            }
-            folderIndex += 1;
-            _event.sender.send("comfy:indexing-folder", {
-                current: folderIndex,
-                total: albumFolders.length,
-                folder: albumFolder.folderPath,
-            });
+            };
 
-            const images: IndexedImagePayload[] = [];
-            for (const filePath of albumFolder.files) {
-                if (cancelToken.cancelled) {
-                    _event.sender.send("comfy:indexing-complete");
-                    indexingCancels.delete(_event.sender.id);
-                    return [];
+            const sendComplete = () => {
+                _event.sender.send("comfy:indexing-complete");
+            };
+
+            worker.on("message", (message: any) => {
+                if (!message || typeof message !== "object" || !message.type) return;
+                if (message.type === "progress-folder") {
+                    _event.sender.send("comfy:indexing-folder", {
+                        current: message.current,
+                        total: message.total,
+                        folder: message.folder,
+                    });
+                    return;
                 }
-                imageIndex += 1;
-                _event.sender.send("comfy:indexing-image", {
-                    current: imageIndex,
-                    total: totalImages,
-                    fileName: path.basename(filePath),
-                });
-                images.push(await buildImagePayload(filePath, albumFolder.rootPath));
-            }
-
-            _event.sender.send("comfy:indexing-album", {
-                rootPath: albumFolder.rootPath,
-                images,
+                if (message.type === "progress-image") {
+                    _event.sender.send("comfy:indexing-image", {
+                        current: message.current,
+                        total: message.total,
+                        fileName: message.fileName,
+                    });
+                    return;
+                }
+                if (message.type === "album") {
+                    _event.sender.send("comfy:indexing-album", {
+                        rootPath: message.rootPath,
+                        images: message.images,
+                    });
+                    albums.push({ rootPath: message.rootPath, images: message.images });
+                    return;
+                }
+                if (message.type === "cancelled") {
+                    sendComplete();
+                    cleanup();
+                    resolve(message.albums ?? albums);
+                    return;
+                }
+                if (message.type === "done") {
+                    sendComplete();
+                    cleanup();
+                    resolve(message.albums ?? albums);
+                    return;
+                }
+                if (message.type === "error") {
+                    console.error("[comfy-browser] indexing worker error", message.message);
+                    sendComplete();
+                    cleanup();
+                    resolve([]);
+                }
             });
 
-            albums.push({ rootPath: albumFolder.rootPath, images });
-        }
+            worker.on("error", (error) => {
+                console.error("[comfy-browser] indexing worker crashed", error);
+                sendComplete();
+                cleanup();
+                resolve([]);
+            });
 
-        _event.sender.send("comfy:indexing-complete");
-        indexingCancels.delete(_event.sender.id);
-        return albums;
+            worker.on("exit", (code) => {
+                if (code !== 0) {
+                    console.error("[comfy-browser] indexing worker exited", code);
+                }
+            });
+
+            worker.postMessage({ type: "start", rootPaths, existingPaths, returnPayload });
+        });
     }
 );
 
@@ -626,6 +650,7 @@ ipcMain.handle("comfy:cancel-indexing", (event) => {
     const token = indexingCancels.get(event.sender.id);
     if (token) {
         token.cancelled = true;
+        token.worker?.postMessage({ type: "cancel" });
     }
 });
 
@@ -888,8 +913,17 @@ ipcMain.on(
             hasSingleSelectedAlbum: boolean;
             hasImages: boolean;
             hasAlbums: boolean;
+            isIndexing: boolean;
+            isRemoving: boolean;
+            isDeleting: boolean;
         }
     ) => {
+        menuLocks.isIndexing = state.isIndexing;
+        menuLocks.isRemoving = state.isRemoving;
+        menuLocks.isDeleting = state.isDeleting;
+        const removalLocked = menuLocks.isRemoving || menuLocks.isDeleting;
+
+        updateMenuItemEnabled("menu-add-folder", !state.isIndexing);
         updateMenuItemEnabled("menu-reveal-active-image", state.hasActiveImage);
         updateMenuItemEnabled("menu-edit-active-image", state.hasActiveImage);
         updateMenuItemEnabled("menu-reveal-active-album", state.hasActiveAlbum);
@@ -899,10 +933,10 @@ ipcMain.on(
         updateMenuItemEnabled("menu-remove-selected-images-favorites", state.hasSelectedImages);
         updateMenuItemEnabled("menu-add-selected-albums-favorites", state.hasSelectedAlbums);
         updateMenuItemEnabled("menu-remove-selected-albums-favorites", state.hasSelectedAlbums);
-        updateMenuItemEnabled("menu-remove-selected-images", state.hasSelectedImages);
-        updateMenuItemEnabled("menu-delete-selected-images-disk", state.hasSelectedImages);
-        updateMenuItemEnabled("menu-remove-selected-albums", state.hasSelectedAlbums);
-        updateMenuItemEnabled("menu-delete-selected-albums-disk", state.hasSelectedAlbums);
+        updateMenuItemEnabled("menu-remove-selected-images", state.hasSelectedImages && !removalLocked);
+        updateMenuItemEnabled("menu-delete-selected-images-disk", state.hasSelectedImages && !removalLocked);
+        updateMenuItemEnabled("menu-remove-selected-albums", state.hasSelectedAlbums && !removalLocked);
+        updateMenuItemEnabled("menu-delete-selected-albums-disk", state.hasSelectedAlbums && !removalLocked);
         updateMenuItemEnabled("menu-rescan-selected-albums", state.hasSelectedAlbums);
         updateMenuItemEnabled("menu-select-all-images", state.hasImages);
         updateMenuItemEnabled("menu-invert-image-selection", state.hasImages);
@@ -989,6 +1023,7 @@ ipcMain.handle(
     ) => {
         const window = BrowserWindow.fromWebContents(event.sender);
         if (!window) return null;
+        const removalLocked = menuLocks.isRemoving || menuLocks.isDeleting;
 
         return new Promise<string | null>((resolve) => {
             let resolved = false;
@@ -1030,10 +1065,12 @@ ipcMain.handle(
                     items.push({
                         label: `Remove Selected Images from Index${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""}…`,
                         click: () => finish("remove-selected-images"),
+                        enabled: !removalLocked,
                     });
                     items.push({
                         label: `Delete Selected Images${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""} from Disk…`,
                         click: () => finish("delete-selected-images-disk"),
+                        enabled: !removalLocked,
                     });
                 }
                 items.push({ type: "separator" });
@@ -1081,10 +1118,12 @@ ipcMain.handle(
                     items.push({
                         label: `Remove Selected Albums from Index${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""}…`,
                         click: () => finish("remove-selected-albums"),
+                        enabled: !removalLocked,
                     });
                     items.push({
                         label: `Delete Selected Albums${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""} from Disk…`,
                         click: () => finish("delete-selected-albums-disk"),
+                        enabled: !removalLocked,
                     });
                 }
                 items.push({ type: "separator" });

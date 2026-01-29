@@ -25,6 +25,8 @@ const FILE_URL_BATCH_SIZE = 30;
 const REMOVAL_BATCH_SIZE = 50;
 const FAVORITES_ID = "favorites";
 
+const toComfyUrl = (filePath: string) => `comfy://local?path=${encodeURIComponent(filePath)}`;
+
 type Tab =
   | { id: "library"; title: "Library"; type: "library" }
   | { id: string; title: string; type: "image"; image: IndexedImage };
@@ -252,6 +254,8 @@ export default function App() {
   const tabScrollRef = useRef<HTMLDivElement | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [lastCopied, setLastCopied] = useState<string | null>(null);
+  const [toastVisibleMessage, setToastVisibleMessage] = useState<string | null>(null);
+  const [toastLeaving, setToastLeaving] = useState(false);
   const [albumSort, setAlbumSort] = useState<AlbumSort>("name-asc");
   const [imageSort, setImageSort] = useState<ImageSort>("date-desc");
   const [selectedAlbumIds, setSelectedAlbumIds] = useState<Set<string>>(new Set());
@@ -260,8 +264,18 @@ export default function App() {
   const [removalAlbumProgress, setRemovalAlbumProgress] = useState<ProgressState>(null);
   const [removalImageProgress, setRemovalImageProgress] = useState<ProgressState>(null);
   const [removalCanceling, setRemovalCanceling] = useState(false);
+  const [isDeletingFiles, setIsDeletingFiles] = useState(false);
   const indexingTokenRef = useRef<{ cancelled: boolean }>({ cancelled: false });
-  const liveIndexRef = useRef<{ active: boolean; basePaths: Set<string>; addedPaths: Set<string> } | null>(null);
+  const liveIndexRef = useRef<
+    { active: boolean; basePaths: Set<string>; addedPaths: Set<string>; addedAlbumRoots: Set<string> } | null
+  >(null);
+  const liveIndexQueueRef = useRef<{ albums: Album[]; images: IndexedImage[]; timer: number | null }>(
+    {
+      albums: [],
+      images: [],
+      timer: null,
+    }
+  );
   const [cancelingIndex, setCancelingIndex] = useState(false);
   const [gridMetrics, setGridMetrics] = useState({ width: 0, height: 0, scrollTop: 0 });
   const gridRef = useRef<HTMLDivElement | null>(null);
@@ -807,6 +821,24 @@ export default function App() {
     },
     [bridgeAvailable]
   );
+
+  const flushLiveIndexQueue = useCallback(() => {
+    const queue = liveIndexQueueRef.current;
+    if (queue.timer) {
+      window.clearTimeout(queue.timer);
+      queue.timer = null;
+    }
+    if (queue.albums.length > 0) {
+      setAlbums((prev) => [...prev, ...queue.albums]);
+      queue.albums = [];
+    }
+    if (queue.images.length > 0) {
+      const baseImages = queue.images.map((image) => ({ ...image, fileUrl: image.filePath }));
+      setImages((prev) => [...prev, ...baseImages]);
+      hydrateFileUrls(baseImages);
+      queue.images = [];
+    }
+  }, [hydrateFileUrls]);
 
   const applyResolvedTabUrls = useCallback((updates: IndexedImage[]) => {
     if (updates.length === 0) return;
@@ -1867,21 +1899,27 @@ export default function App() {
   const handleDeleteImagesFromDisk = async (ids: string[], label: string) => {
     if (!bridgeAvailable || !window.comfy?.deleteFilesFromDisk) return [];
     if (!ids.length) return [];
+    if (isDeletingFiles) return [];
     const filePaths = ids
       .map((id) => imageById.get(id)?.filePath)
       .filter((path): path is string => Boolean(path));
     if (!filePaths.length) return [];
-    const result = await window.comfy.deleteFilesFromDisk({
-      paths: filePaths,
-      label,
-      detail: "This will permanently delete the file(s) from disk. This action cannot be undone.",
-    });
-    if (!result || result.canceled || result.deletedPaths.length === 0) return [];
-    const deletedPathSet = new Set(result.deletedPaths);
-    const deletedIds = ids.filter((id) => deletedPathSet.has(imageById.get(id)?.filePath ?? ""));
-    if (!deletedIds.length) return [];
-    await handleRemoveImages(deletedIds, { confirm: false });
-    return deletedIds;
+    setIsDeletingFiles(true);
+    try {
+      const result = await window.comfy.deleteFilesFromDisk({
+        paths: filePaths,
+        label,
+        detail: "This will permanently delete the file(s) from disk. This action cannot be undone.",
+      });
+      if (!result || result.canceled || result.deletedPaths.length === 0) return [];
+      const deletedPathSet = new Set(result.deletedPaths);
+      const deletedIds = ids.filter((id) => deletedPathSet.has(imageById.get(id)?.filePath ?? ""));
+      if (!deletedIds.length) return [];
+      await handleRemoveImages(deletedIds, { confirm: false });
+      return deletedIds;
+    } finally {
+      setIsDeletingFiles(false);
+    }
   };
 
   const handleDeleteAlbumFromDisk = async (albumId: string) => {
@@ -2039,6 +2077,12 @@ export default function App() {
     if (index <= 0) return "";
     return name.slice(index);
   };
+  const formatIndexSummary = (label: string, albumsAdded: number, imagesAdded: number, cancelled: boolean) => {
+    const status = cancelled ? `${label} canceled` : `${label} complete`;
+    const albumLabel = albumsAdded === 1 ? "album" : "albums";
+    const imageLabel = imagesAdded === 1 ? "image" : "images";
+    return `${status} — added ${albumsAdded} ${albumLabel}, ${imagesAdded} ${imageLabel}`;
+  };
 
   const handleRescanAlbums = async (albumIds: string[]) => {
     if (!bridgeAvailable || !window.comfy?.indexFolders) return;
@@ -2054,7 +2098,14 @@ export default function App() {
       active: true,
       basePaths: new Set(images.map((image) => image.filePath)),
       addedPaths: new Set(),
+      addedAlbumRoots: new Set(),
     };
+    liveIndexQueueRef.current.albums = [];
+    liveIndexQueueRef.current.images = [];
+    if (liveIndexQueueRef.current.timer) {
+      window.clearTimeout(liveIndexQueueRef.current.timer);
+      liveIndexQueueRef.current.timer = null;
+    }
     try {
       const targetImageList = images.filter((image) => targets.some((album) => album.id === image.albumId));
       const missingPaths = window.comfy?.findMissingFiles
@@ -2073,15 +2124,12 @@ export default function App() {
         : images;
       const payload = (await window.comfy.indexFolders(
         rootPaths,
-        imagesForIndex.map((image) => image.filePath)
+        imagesForIndex.map((image) => image.filePath),
+        { returnPayload: false }
       )) as Array<{
         rootPath: string;
         images: IndexedImagePayload[];
       }>;
-
-      if (token.cancelled || payload.length === 0) {
-        return;
-      }
 
       const existingFilePaths = new Set(images.map((image) => image.filePath));
       const liveIndex = liveIndexRef.current;
@@ -2092,28 +2140,33 @@ export default function App() {
       const albumByRoot = new Map(targets.map((album) => [album.rootPath, album]));
       const newImages: IndexedImage[] = [];
 
-      for (const albumPayload of payload) {
-        const album = albumByRoot.get(albumPayload.rootPath);
-        if (!album) continue;
-        const filtered = albumPayload.images.filter((image) => !existingFilePaths.has(image.filePath));
-        if (filtered.length === 0) continue;
-        filtered.forEach((image) => existingFilePaths.add(image.filePath));
-        const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
-          { type: "add-images", data: { albumId: album.id, images: filtered } },
-          async () => ({ album: null, images: await addImagesToAlbum(album.id, filtered) })
-        );
-        newImages.push(...result.images);
+      if (payload.length > 0) {
+        for (const albumPayload of payload) {
+          const album = albumByRoot.get(albumPayload.rootPath);
+          if (!album) continue;
+          const filtered = albumPayload.images.filter((image) => !existingFilePaths.has(image.filePath));
+          if (filtered.length === 0) continue;
+          filtered.forEach((image) => existingFilePaths.add(image.filePath));
+          const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
+            { type: "add-images", data: { albumId: album.id, images: filtered } },
+            async () => ({ album: null, images: await addImagesToAlbum(album.id, filtered) })
+          );
+          newImages.push(...result.images);
+        }
       }
 
-      if (newImages.length === 0) {
-        setToastMessage("No new images to add");
-        setLastCopied("No new images to add");
-        return;
-      }
+      const liveAddedImages = liveIndexRef.current?.addedPaths.size ?? 0;
+      const totalImages = liveAddedImages + newImages.length;
+      const totalAlbums = liveIndexRef.current?.addedAlbumRoots.size ?? 0;
+      const summary = formatIndexSummary("Rescan", totalAlbums, totalImages, token.cancelled);
+      setToastMessage(summary);
+      setLastCopied(summary);
 
-      const baseImages = newImages.map((image) => ({ ...image, fileUrl: image.filePath }));
-      setImages((prev) => [...prev, ...baseImages]);
-      hydrateFileUrls(baseImages);
+      if (newImages.length > 0) {
+        const baseImages = newImages.map((image) => ({ ...image, fileUrl: image.filePath }));
+        setImages((prev) => [...prev, ...baseImages]);
+        hydrateFileUrls(baseImages);
+      }
     } finally {
       if (liveIndexRef.current) {
         liveIndexRef.current.active = false;
@@ -2123,6 +2176,7 @@ export default function App() {
   };
 
   const handleAddFolder = async () => {
+    if (isIndexing) return;
     if (!bridgeAvailable) {
       setBridgeError("Electron bridge unavailable. Launch the app via Electron (not the browser) to add folders.");
       return;
@@ -2137,7 +2191,14 @@ export default function App() {
       active: true,
       basePaths: new Set(images.map((image) => image.filePath)),
       addedPaths: new Set(),
+      addedAlbumRoots: new Set(),
     };
+    liveIndexQueueRef.current.albums = [];
+    liveIndexQueueRef.current.images = [];
+    if (liveIndexQueueRef.current.timer) {
+      window.clearTimeout(liveIndexQueueRef.current.timer);
+      liveIndexQueueRef.current.timer = null;
+    }
     try {
       const folderPaths = await window.comfy.selectFolders();
       if (!folderPaths.length) {
@@ -2167,15 +2228,12 @@ export default function App() {
         : images;
       const payload = (await window.comfy.indexFolders(
         uniquePaths,
-        imagesForIndex.map((image) => image.filePath)
+        imagesForIndex.map((image) => image.filePath),
+        { returnPayload: false }
       )) as Array<{
         rootPath: string;
         images: IndexedImagePayload[];
       }>;
-
-      if (token.cancelled || payload.length === 0) {
-        return;
-      }
 
       const existingFilePaths = new Set(images.map((image) => image.filePath));
       const liveIndex = liveIndexRef.current;
@@ -2187,43 +2245,46 @@ export default function App() {
       const newAlbums: Album[] = [];
       const newImages: IndexedImage[] = [];
 
-      for (const albumPayload of payload) {
-        const filtered = albumPayload.images.filter((image) => !existingFilePaths.has(image.filePath));
-        if (filtered.length === 0) continue;
-        filtered.forEach((image) => existingFilePaths.add(image.filePath));
+      if (payload.length > 0) {
+        for (const albumPayload of payload) {
+          const filtered = albumPayload.images.filter((image) => !existingFilePaths.has(image.filePath));
+          if (filtered.length === 0) continue;
+          filtered.forEach((image) => existingFilePaths.add(image.filePath));
 
-        const existingAlbum = albumByRoot.get(albumPayload.rootPath);
-        if (existingAlbum) {
+          const existingAlbum = albumByRoot.get(albumPayload.rootPath);
+          if (existingAlbum) {
+            const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
+              { type: "add-images", data: { albumId: existingAlbum.id, images: filtered } },
+              async () => ({ album: null, images: await addImagesToAlbum(existingAlbum.id, filtered) })
+            );
+            newImages.push(...result.images);
+            continue;
+          }
+
           const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
-            { type: "add-images", data: { albumId: existingAlbum.id, images: filtered } },
-            async () => ({ album: null, images: await addImagesToAlbum(existingAlbum.id, filtered) })
+            { type: "add-album", data: { rootPath: albumPayload.rootPath, images: filtered } },
+            async () => addAlbumWithImages(albumPayload.rootPath, filtered)
           );
+          if (result.album) {
+            newAlbums.push(result.album);
+          }
           newImages.push(...result.images);
-          continue;
         }
-
-        const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
-          { type: "add-album", data: { rootPath: albumPayload.rootPath, images: filtered } },
-          async () => addAlbumWithImages(albumPayload.rootPath, filtered)
-        );
-        if (result.album) {
-          newAlbums.push(result.album);
-        }
-        newImages.push(...result.images);
       }
 
-      if (newAlbums.length === 0 && newImages.length === 0) {
-        setToastMessage("No new images to add");
-        setLastCopied("No new images to add");
-        return;
-      }
-
-      const baseImages = newImages.map((image) => ({ ...image, fileUrl: image.filePath }));
+      const liveAddedImages = liveIndexRef.current?.addedPaths.size ?? 0;
+      const liveAddedAlbums = liveIndexRef.current?.addedAlbumRoots.size ?? 0;
+      const totalImages = liveAddedImages + newImages.length;
+      const totalAlbums = liveAddedAlbums + newAlbums.length;
+      const summary = formatIndexSummary("Indexing", totalAlbums, totalImages, token.cancelled);
+      setToastMessage(summary);
+      setLastCopied(summary);
 
       if (newAlbums.length > 0) {
         setAlbums((prev) => [...prev, ...newAlbums]);
       }
-      if (baseImages.length > 0) {
+      if (newImages.length > 0) {
+        const baseImages = newImages.map((image) => ({ ...image, fileUrl: image.filePath }));
         setImages((prev) => [...prev, ...baseImages]);
         hydrateFileUrls(baseImages);
       }
@@ -2239,9 +2300,6 @@ export default function App() {
     if (!bridgeAvailable || !window.comfy?.cancelIndexing) return;
     if (cancelingIndex) return;
     indexingTokenRef.current.cancelled = true;
-    if (liveIndexRef.current) {
-      liveIndexRef.current.active = false;
-    }
     setCancelingIndex(true);
     setIsIndexing(false);
     setFolderProgress(null);
@@ -2458,6 +2516,9 @@ export default function App() {
         (activeAlbum !== "all" && activeAlbum !== FAVORITES_ID && selectedAlbumIds.size === 0),
       hasImages: isLibraryTab && filteredImages.length > 0,
       hasAlbums: albums.length > 0,
+      isIndexing,
+      isRemoving: !!(removalAlbumProgress || removalImageProgress),
+      isDeleting: isDeletingFiles,
     });
   }, [
     bridgeAvailable,
@@ -2469,6 +2530,10 @@ export default function App() {
     selectedIds,
     selectedAlbumIds,
     albumById,
+    isIndexing,
+    removalAlbumProgress,
+    removalImageProgress,
+    isDeletingFiles,
   ]);
 
   const activeTabContent = useMemo(() => {
@@ -2604,9 +2669,21 @@ export default function App() {
 
   useEffect(() => {
     if (!toastMessage) return;
-    const timeout = window.setTimeout(() => setToastMessage(null), 1800);
+    setToastVisibleMessage(toastMessage);
+    setToastLeaving(false);
+    const timeout = window.setTimeout(() => setToastMessage(null), 2600);
     return () => window.clearTimeout(timeout);
   }, [toastMessage]);
+
+  useEffect(() => {
+    if (toastMessage || !toastVisibleMessage) return;
+    setToastLeaving(true);
+    const timeout = window.setTimeout(() => {
+      setToastVisibleMessage(null);
+      setToastLeaving(false);
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [toastMessage, toastVisibleMessage]);
 
   useEffect(() => {
     if (!bridgeAvailable) return;
@@ -2632,23 +2709,33 @@ export default function App() {
           { type: "add-images", data: { albumId: existingAlbum.id, images: filtered } },
           async () => ({ album: null, images: await addImagesToAlbum(existingAlbum.id, filtered) })
         );
-        const baseImages = result.images.map((image) => ({ ...image, fileUrl: image.filePath }));
-        setImages((prev) => [...prev, ...baseImages]);
-        hydrateFileUrls(baseImages);
+        if (result.images.length > 0) {
+          liveIndexQueueRef.current.images.push(...result.images);
+        }
       } else {
         const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
           { type: "add-album", data: { rootPath: payload.rootPath, images: filtered } },
           async () => addAlbumWithImages(payload.rootPath, filtered)
         );
         if (result.album) {
-          setAlbums((prev) => [...prev, result.album!]);
+          setAlbums((prev) =>
+            prev.some((album) => album.rootPath === result.album!.rootPath) ? prev : [...prev, result.album!]
+          );
+          liveIndexRef.current?.addedAlbumRoots.add(payload.rootPath);
         }
-        const baseImages = result.images.map((image) => ({ ...image, fileUrl: image.filePath }));
-        setImages((prev) => [...prev, ...baseImages]);
-        hydrateFileUrls(baseImages);
+        if (result.images.length > 0) {
+          liveIndexQueueRef.current.images.push(...result.images);
+        }
+      }
+
+      if (!liveIndexQueueRef.current.timer) {
+        liveIndexQueueRef.current.timer = window.setTimeout(() => {
+          flushLiveIndexQueue();
+        }, 120);
       }
     });
     const unsubscribeComplete = window.comfy.onIndexingComplete(() => {
+      flushLiveIndexQueue();
       setFolderProgress(null);
       setImageProgress(null);
       if (liveIndexRef.current) {
@@ -2662,7 +2749,7 @@ export default function App() {
       unsubscribeAlbum();
       unsubscribeComplete();
     };
-  }, [bridgeAvailable, albums, hydrateFileUrls, runIndexingTask]);
+  }, [bridgeAvailable, albums, flushLiveIndexQueue, runIndexingTask]);
 
   useEffect(() => {
     const target = gridRef.current;
@@ -2696,123 +2783,15 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col">
-      {toastMessage ? (
-        <div className="pointer-events-none fixed right-6 top-6 z-50 rounded-lg bg-slate-900/90 px-4 py-2 text-xs text-slate-100 shadow-lg">
-          {toastMessage}
-        </div>
-      ) : null}
-      {isIndexing ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/70">
-          <div className="pointer-events-auto rounded-2xl border border-slate-800 bg-slate-950/90 px-6 py-4 text-sm text-slate-100 shadow-xl">
-            <div className="flex items-center gap-3 h-full">
-              <div className="h-3 w-3 animate-pulse rounded-full bg-indigo-400" />
-              <span>Indexing images… this may take a moment.</span>
-            </div>
-            <div className="mt-4 space-y-3 text-xs text-slate-300">
-              <div>
-                <div className="flex items-center justify-between">
-                  <span>Folders</span>
-                  <span>{folderProgress ? `${folderProgress.current} / ${folderProgress.total}` : "…"}</span>
-                </div>
-                <progress
-                  className="progress-bar"
-                  value={folderProgress ? folderProgress.current : 0}
-                  max={folderProgress ? folderProgress.total : 1}
-                />
-                {folderProgress ? (
-                  <div className="mt-1 truncate text-[11px] text-slate-400" title={folderProgress.label}>
-                    {folderProgress.label}
-                  </div>
-                ) : null}
-              </div>
-              <div>
-                <div className="flex items-center justify-between">
-                  <span>Images</span>
-                  <span>{imageProgress ? `${imageProgress.current} / ${imageProgress.total}` : "…"}</span>
-                </div>
-                <progress
-                  className="progress-bar"
-                  value={imageProgress ? imageProgress.current : 0}
-                  max={imageProgress ? imageProgress.total : 1}
-                />
-                {imageProgress ? (
-                  <div className="mt-1 truncate text-[11px] text-slate-400" title={imageProgress.label}>
-                    {imageProgress.label}
-                  </div>
-                ) : null}
-              </div>
-              <div className="mt-4 flex justify-end">
-                <button
-                  type="button"
-                  onClick={handleCancelIndexing}
-                  disabled={cancelingIndex}
-                  className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-60"
-                >
-                  {cancelingIndex ? "Canceling…" : "Cancel"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {removalAlbumProgress || removalImageProgress ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/70">
-          <div className="pointer-events-auto rounded-2xl border border-slate-800 bg-slate-950/90 px-6 py-4 text-sm text-slate-100 shadow-xl">
-            <div className="flex items-center gap-3 h-full">
-              <div className="h-3 w-3 animate-pulse rounded-full bg-rose-400" />
-              <span>{removalAlbumProgress ? "Removing albums…" : "Removing images…"}</span>
-            </div>
-            <div className="mt-4 space-y-3 text-xs text-slate-300">
-              {removalAlbumProgress ? (
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span>Albums</span>
-                    <span>{`${removalAlbumProgress.current} / ${removalAlbumProgress.total}`}</span>
-                  </div>
-                  <progress
-                    className="progress-bar"
-                    value={removalAlbumProgress.current}
-                    max={removalAlbumProgress.total}
-                  />
-                  <div
-                    className="mt-1 truncate text-[11px] text-slate-400"
-                    title={removalAlbumProgress.label}
-                  >
-                    {removalAlbumProgress.label}
-                  </div>
-                </div>
-              ) : null}
-              {removalImageProgress ? (
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span>Images</span>
-                    <span>{`${removalImageProgress.current} / ${removalImageProgress.total}`}</span>
-                  </div>
-                  <progress
-                    className="progress-bar"
-                    value={removalImageProgress.current}
-                    max={removalImageProgress.total}
-                  />
-                  <div
-                    className="mt-1 truncate text-[11px] text-slate-400"
-                    title={removalImageProgress.label}
-                  >
-                    {removalImageProgress.label}
-                  </div>
-                </div>
-              ) : null}
-              <div className="mt-4 flex justify-end">
-                <button
-                  type="button"
-                  onClick={handleCancelRemoval}
-                  disabled={removalCanceling}
-                  className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-60"
-                >
-                  {removalCanceling ? "Canceling…" : "Cancel"}
-                </button>
-              </div>
-            </div>
-          </div>
+      {toastVisibleMessage ? (
+        <div
+          className={`pointer-events-none fixed bottom-6 right-6 z-50 rounded-lg border border-slate-200/60 bg-slate-100/95 px-4 py-2 text-xs text-slate-900 shadow-xl duration-200 ${
+            toastLeaving
+              ? "animate-out fade-out slide-out-to-bottom-2"
+              : "animate-in fade-in slide-in-from-bottom-2"
+          }`}
+        >
+          {toastVisibleMessage}
         </div>
       ) : null}
       {bridgeError ? (
@@ -2958,21 +2937,135 @@ export default function App() {
             ))}
           </div>
           <div className="mt-4 space-y-3 border-t border-slate-800 pt-4">
-            <button
-              onClick={handleAddFolder}
-              disabled={!bridgeAvailable || isIndexing}
-              className="w-full rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:opacity-60"
-            >
-              {isIndexing ? "Indexing…" : "Add Folder"}
-            </button>
-            <div className="flex items-center justify-between">
+            <div className="relative">
               <button
-                onClick={handleRemoveSelectedAlbums}
-                disabled={selectedAlbumIds.size === 0}
-                className="rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-200 disabled:opacity-40"
+                onClick={handleAddFolder}
+                disabled={!bridgeAvailable || isIndexing}
+                className="w-full rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:opacity-60"
               >
-                Remove selected
+                {isIndexing ? "Indexing…" : "Add Folder"}
               </button>
+              {isIndexing ? (
+                <div className="pointer-events-auto absolute bottom-full left-0 right-0 z-10 mb-2 min-h-[110px] rounded-lg border border-slate-700 bg-slate-950/95 px-3 py-2 text-[11px] text-slate-200 shadow-lg">
+                  <div className="flex items-center gap-2 text-xs">
+                    <div className="h-2 w-2 animate-pulse rounded-full bg-indigo-400" />
+                    <span>Indexing…</span>
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span>Folders</span>
+                        <span>{folderProgress ? `${folderProgress.current} / ${folderProgress.total}` : "…"}</span>
+                      </div>
+                      <progress
+                        className="progress-bar"
+                        value={folderProgress ? folderProgress.current : 0}
+                        max={folderProgress ? folderProgress.total : 1}
+                      />
+                      {folderProgress ? (
+                        <div className="mt-1 truncate text-[10px] text-slate-400" title={folderProgress.label}>
+                          {folderProgress.label}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span>Images</span>
+                        <span>{imageProgress ? `${imageProgress.current} / ${imageProgress.total}` : "…"}</span>
+                      </div>
+                      <progress
+                        className="progress-bar"
+                        value={imageProgress ? imageProgress.current : 0}
+                        max={imageProgress ? imageProgress.total : 1}
+                      />
+                      {imageProgress ? (
+                        <div className="mt-1 truncate text-[10px] text-slate-400" title={imageProgress.label}>
+                          {imageProgress.label}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={handleCancelIndexing}
+                        disabled={cancelingIndex}
+                        className="rounded-md border border-slate-700 px-2 py-0.5 text-[11px] text-slate-200 hover:bg-slate-900 disabled:opacity-60"
+                      >
+                        {cancelingIndex ? "Canceling…" : "Cancel"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="relative">
+                <button
+                  onClick={handleRemoveSelectedAlbums}
+                  disabled={selectedAlbumIds.size === 0 || !!(removalAlbumProgress || removalImageProgress)}
+                  className="rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-200 disabled:opacity-40"
+                >
+                  Remove selected
+                </button>
+                {removalAlbumProgress || removalImageProgress ? (
+                  <div className="pointer-events-auto absolute bottom-full left-0 z-10 mb-2 w-56 min-h-[110px] rounded-lg border border-slate-700 bg-slate-950/95 px-3 py-2 text-[11px] text-slate-200 shadow-lg">
+                    <div className="flex items-center gap-2 text-xs">
+                      <div className="h-2 w-2 animate-pulse rounded-full bg-rose-400" />
+                      <span>{removalAlbumProgress ? "Removing albums…" : "Removing images…"}</span>
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      {removalAlbumProgress ? (
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <span>Albums</span>
+                            <span>{`${removalAlbumProgress.current} / ${removalAlbumProgress.total}`}</span>
+                          </div>
+                          <progress
+                            className="progress-bar"
+                            value={removalAlbumProgress.current}
+                            max={removalAlbumProgress.total}
+                          />
+                          <div
+                            className="mt-1 truncate text-[10px] text-slate-400"
+                            title={removalAlbumProgress.label}
+                          >
+                            {removalAlbumProgress.label}
+                          </div>
+                        </div>
+                      ) : null}
+                      {removalImageProgress ? (
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <span>Images</span>
+                            <span>{`${removalImageProgress.current} / ${removalImageProgress.total}`}</span>
+                          </div>
+                          <progress
+                            className="progress-bar"
+                            value={removalImageProgress.current}
+                            max={removalImageProgress.total}
+                          />
+                          <div
+                            className="mt-1 truncate text-[10px] text-slate-400"
+                            title={removalImageProgress.label}
+                          >
+                            {removalImageProgress.label}
+                          </div>
+                        </div>
+                      ) : null}
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={handleCancelRemoval}
+                          disabled={removalCanceling}
+                          className="rounded-md border border-slate-700 px-2 py-0.5 text-[11px] text-slate-200 hover:bg-slate-900 disabled:opacity-60"
+                        >
+                          {removalCanceling ? "Canceling…" : "Cancel"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
               <div className="text-[11px] text-slate-500">{selectedAlbumIds.size} selected</div>
             </div>
             <button
@@ -3170,7 +3263,7 @@ export default function App() {
                     const top = row * rowHeight;
                     const left = col * (iconSize + GRID_GAP);
                     const isSelected = selectedIds.has(image.id);
-                    const thumbUrl = thumbnailMap[image.id] ?? image.fileUrl;
+                    const thumbUrl = thumbnailMap[image.id] ?? (image.fileUrl === image.filePath ? toComfyUrl(image.filePath) : image.fileUrl);
                     const isLoaded = loadedThumbs.has(image.id);
 
                     const isRenaming = renameState?.type === "image" && renameState.id === image.id;
@@ -3323,7 +3416,7 @@ export default function App() {
                   className="relative flex flex-1 items-center justify-center overflow-auto p-2 outline-none"
                 >
                   <img
-                    src={activeTabContent.fileUrl}
+                    src={activeTabContent.fileUrl === activeTabContent.filePath ? toComfyUrl(activeTabContent.filePath) : activeTabContent.fileUrl}
                     alt={activeTabContent.fileName}
                     decoding="async"
                     loading="eager"

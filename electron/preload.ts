@@ -3,8 +3,8 @@ import type { IndexedImagePayload } from "../src/lib/types";
 
 contextBridge.exposeInMainWorld("comfy", {
   selectFolders: () => ipcRenderer.invoke("comfy:select-folders"),
-  indexFolders: (paths: string[], existingPaths?: string[]) =>
-    ipcRenderer.invoke("comfy:index-folders", paths, existingPaths ?? []),
+  indexFolders: (paths: string[], existingPaths?: string[], options?: { returnPayload?: boolean }) =>
+    ipcRenderer.invoke("comfy:index-folders", paths, existingPaths ?? [], options ?? {}),
   cancelIndexing: () => ipcRenderer.invoke("comfy:cancel-indexing"),
   toFileUrl: (filePath: string) => ipcRenderer.invoke("comfy:to-file-url", filePath),
   getThumbnail: (filePath: string) => ipcRenderer.invoke("comfy:get-thumbnail", filePath),
