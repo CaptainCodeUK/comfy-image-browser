@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   addCollectionWithImages,
   addImagesToCollection,
@@ -19,7 +19,7 @@ import type { Collection, IndexedImage, IndexedImagePayload } from "./lib/types"
 const DEFAULT_ICON_SIZE = 180;
 const GRID_GAP = 16;
 const CARD_META_HEIGHT = 56;
-const THUMBNAIL_BATCH_SIZE = 12;
+const THUMBNAIL_BATCH_SIZE = 6;
 const THUMBNAIL_RETRY_MS = 1200;
 const FILE_URL_BATCH_SIZE = 30;
 const REMOVAL_BATCH_SIZE = 50;
@@ -303,6 +303,70 @@ export default function App() {
   const thumbnailTokenRef = useRef(0);
   const [thumbnailRetryTick, setThumbnailRetryTick] = useState(0);
   const metadataCacheRef = useRef<Map<string, ReturnType<typeof extractMetadataSummary>>>(new Map());
+  const keyNavContextRef = useRef({
+    activeTab: LibraryTab as Tab,
+    selectedIds: new Set<string>(),
+    selectedCollectionIds: new Set<string>(),
+    images: [] as IndexedImage[],
+    collections: [] as Collection[],
+    activeCollection: "all" as string | "all",
+    collectionById: new Map<string, Collection>(),
+    filteredImageIds: [] as string[],
+    filteredImageCount: 0,
+    focusedIndex: 0 as number | null,
+    selectionAnchor: 0 as number | null,
+    gridColumnCount: 1,
+    gridHeight: 0,
+    rowHeight: 0,
+    tabs: [] as Tab[],
+    navigationImageIds: [] as string[],
+    imageById: new Map<string, IndexedImage>(),
+    getRangeIds: (_start: number, _end: number) => new Set<string>(),
+    startRenameImage: (_image: IndexedImage) => {},
+    startRenameCollection: (_collection: Collection) => {},
+    toggleFavoriteImage: (_image: IndexedImage) => Promise.resolve(),
+    handleOpenImages: (_images: IndexedImage[]) => Promise.resolve(),
+    handleNavigateImage: (_image: IndexedImage) => Promise.resolve(),
+    handleCloseTab: (_tabId: string) => {},
+    handleDuplicateTab: () => {},
+    handleCloseOtherTabs: (_tabId: string) => {},
+    handleCloseAllTabs: () => {},
+  });
+  const menuActionContextRef = useRef({
+    selectedIds,
+    selectedCollectionIds,
+    images,
+    collections,
+    activeTab,
+    activeCollection,
+    collectionById: new Map<string, Collection>(),
+    handleAddFolder: () => Promise.resolve(),
+    handleRemoveSelected: () => Promise.resolve(),
+    handleRemoveSelectedCollections: () => Promise.resolve(),
+    handleDeleteSelectedCollectionsFromDisk: () => Promise.resolve(),
+    handleDeleteImagesFromDisk: (_ids: string[], _label: string) => Promise.resolve([] as string[]),
+    handleRevealInFolder: (_path?: string) => Promise.resolve(),
+    handleOpenInEditor: (_path?: string) => Promise.resolve(),
+    startRenameImage: (_image: IndexedImage) => {},
+    startRenameCollection: (_collection: Collection) => {},
+    addFavoriteImages: (_ids: string[], _label: string) => Promise.resolve(),
+    removeFavoriteImages: (_ids: string[], _label: string) => Promise.resolve(),
+    addCollectionToFavorites: (_collection: Collection) => Promise.resolve(),
+    removeCollectionFromFavorites: (_collection: Collection) => Promise.resolve(),
+    handleRescanCollections: (_ids: string[]) => Promise.resolve(),
+    handleSelectAllImages: () => {},
+    handleInvertImageSelection: () => {},
+    handleClearImageSelection: () => {},
+    handleSelectAllCollections: () => {},
+    handleInvertCollectionSelection: () => {},
+    handleClearCollectionSelection: () => {},
+    handleCycleTab: (_direction: number) => undefined,
+    handleDuplicateTab: () => undefined,
+    handleCloseTab: (_tabId: string) => undefined,
+    handleCloseOtherTabs: (_tabId: string) => undefined,
+    handleCloseAllTabs: () => undefined,
+    setAboutOpen: (_open: boolean) => undefined,
+  });
   const removalWorkerRef = useRef<Worker | null>(null);
   const removalRequestsRef = useRef(
     new Map<
@@ -683,7 +747,7 @@ export default function App() {
     [imageSort]
   );
 
-  const filteredImageResult = useMemo(() => {
+  const sortedFilteredImages = useMemo(() => {
     const start = performance.now();
     const query = search.trim().toLowerCase();
     const visible = images.filter((image) => {
@@ -702,8 +766,21 @@ export default function App() {
       return searchText.includes(query);
     });
     const sorted = sortImages(visible);
+    const duration = performance.now() - start;
+    if (duration > 50) {
+      console.log("[comfy-browser] Filter/sort cost", {
+        durationMs: Number(duration.toFixed(1)),
+        total: images.length,
+        visible: sorted.length,
+      });
+    }
+    return { sorted, query };
+  }, [images, search, activeCollection, favoriteIds, searchIndex, sortImages]);
+
+  const filteredImageResult = useMemo(() => {
+    const sorted = sortedFilteredImages.sorted;
     const ids = sorted.map((image) => image.id);
-    const allImagesMode = activeCollection === "all" && !query;
+    const allImagesMode = activeCollection === "all" && !sortedFilteredImages.query;
     if (allImagesMode && sorted.length > gridColumnCount * 3) {
       const bufferRows = 6;
       const startRow = Math.max(0, Math.floor(gridMetrics.scrollTop / rowHeight) - bufferRows);
@@ -713,22 +790,10 @@ export default function App() {
       const windowed = sorted.slice(windowStartIndex, windowEndIndex);
       return { items: windowed, ids, totalCount: ids.length, windowStartIndex };
     }
-    const duration = performance.now() - start;
-    if (duration > 50) {
-      console.log("[comfy-browser] Filter/sort cost", {
-        durationMs: Number(duration.toFixed(1)),
-        total: images.length,
-        visible: sorted.length,
-      });
-    }
     return { items: sorted, ids, totalCount: ids.length, windowStartIndex: 0 };
   }, [
-    images,
-    search,
+    sortedFilteredImages,
     activeCollection,
-    favoriteIds,
-    searchIndex,
-    sortImages,
     gridColumnCount,
     gridMetrics.scrollTop,
     gridMetrics.height,
@@ -740,14 +805,21 @@ export default function App() {
   const filteredImageCount = filteredImageResult.totalCount;
   const filteredWindowStart = filteredImageResult.windowStartIndex;
 
-  const selectedImages = useMemo(
-    () =>
-      filteredImageIds
-        .filter((id) => selectedIds.has(id))
-        .map((id) => imageById.get(id))
-        .filter((image): image is IndexedImage => Boolean(image)),
-    [filteredImageIds, selectedIds, imageById]
-  );
+  const filteredIndexById = useMemo(() => {
+    return new Map(filteredImageIds.map((id, index) => [id, index] as const));
+  }, [filteredImageIds]);
+
+  const selectedImages = useMemo(() => {
+    if (selectedIds.size === 0) return [];
+    const orderedIds = Array.from(selectedIds)
+      .map((id) => ({ id, index: filteredIndexById.get(id) }))
+      .filter((entry): entry is { id: string; index: number } => typeof entry.index === "number")
+      .sort((a, b) => a.index - b.index)
+      .map((entry) => entry.id);
+    return orderedIds
+      .map((id) => imageById.get(id))
+      .filter((image): image is IndexedImage => Boolean(image));
+  }, [selectedIds, filteredIndexById, imageById]);
 
   const collectionIdForNav =
     activeTab.type === "image"
@@ -792,14 +864,17 @@ export default function App() {
       const viewBottom = viewTop + grid.clientHeight;
       if (rowTop < viewTop) {
         grid.scrollTop = rowTop;
+        setGridMetrics((prev) => (prev.scrollTop === rowTop ? prev : { ...prev, scrollTop: rowTop }));
       } else if (rowBottom > viewBottom) {
-        grid.scrollTop = rowBottom - grid.clientHeight;
+        const nextScrollTop = rowBottom - grid.clientHeight;
+        grid.scrollTop = nextScrollTop;
+        setGridMetrics((prev) => (prev.scrollTop === nextScrollTop ? prev : { ...prev, scrollTop: nextScrollTop }));
       }
     },
     [gridColumnCount, rowHeight]
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (focusedIndex === null) return;
     scrollToIndex(focusedIndex);
   }, [focusedIndex, scrollToIndex]);
@@ -1298,7 +1373,68 @@ export default function App() {
   };
 
   useEffect(() => {
+    keyNavContextRef.current = {
+      activeTab,
+      selectedIds,
+      selectedCollectionIds,
+      images,
+      collections,
+      activeCollection,
+      collectionById,
+      filteredImageIds,
+      filteredImageCount,
+      focusedIndex,
+      selectionAnchor,
+      gridColumnCount,
+      gridHeight: gridMetrics.height,
+      rowHeight,
+      tabs,
+      navigationImageIds,
+      imageById,
+      getRangeIds,
+      startRenameImage,
+      startRenameCollection,
+      toggleFavoriteImage,
+      handleOpenImages,
+      handleNavigateImage,
+      handleCloseTab,
+      handleDuplicateTab,
+      handleCloseOtherTabs,
+      handleCloseAllTabs,
+    };
+  }, [
+    activeTab,
+    selectedIds,
+    selectedCollectionIds,
+    images,
+    collections,
+    activeCollection,
+    collectionById,
+    filteredImageIds,
+    filteredImageCount,
+    focusedIndex,
+    selectionAnchor,
+    gridColumnCount,
+    gridMetrics.height,
+    rowHeight,
+    tabs,
+    navigationImageIds,
+    imageById,
+    getRangeIds,
+    startRenameImage,
+    startRenameCollection,
+    toggleFavoriteImage,
+    handleOpenImages,
+    handleNavigateImage,
+    handleCloseTab,
+    handleDuplicateTab,
+    handleCloseOtherTabs,
+    handleCloseAllTabs,
+  ]);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      const context = keyNavContextRef.current;
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
         return;
@@ -1307,30 +1443,33 @@ export default function App() {
         event.preventDefault();
         if (event.shiftKey) {
           const collectionTarget =
-            selectedCollectionIds.size === 1
-              ? collections.find((collection) => selectedCollectionIds.has(collection.id))
-              : activeCollection !== "all"
-              ? collectionById.get(activeCollection) ?? null
+            context.selectedCollectionIds.size === 1
+              ? context.collections.find((collection) => context.selectedCollectionIds.has(collection.id))
+              : context.activeCollection !== "all"
+              ? context.collectionById.get(context.activeCollection) ?? null
               : null;
           if (collectionTarget) {
-            startRenameCollection(collectionTarget);
+            context.startRenameCollection(collectionTarget);
           }
         } else {
           const imageTarget =
-            activeTab.type === "image"
-              ? activeTab.image
-              : selectedIds.size === 1
-              ? images.find((image) => selectedIds.has(image.id))
+            context.activeTab.type === "image"
+              ? context.activeTab.image
+              : context.selectedIds.size === 1
+              ? context.images.find((image) => context.selectedIds.has(image.id))
               : null;
           if (imageTarget) {
-            startRenameImage(imageTarget);
+            context.startRenameImage(imageTarget);
           }
         }
         return;
       }
-      if (event.key === "Enter" && activeTab.type === "library" && selectedIds.size > 0) {
+      if (event.key === "Enter" && context.activeTab.type === "library" && context.selectedIds.size > 0) {
         event.preventDefault();
-        void handleOpenImages(selectedImages);
+        const selected = Array.from(context.selectedIds)
+          .map((id) => context.imageById.get(id))
+          .filter((image): image is IndexedImage => Boolean(image));
+        void context.handleOpenImages(selected);
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
@@ -1354,13 +1493,13 @@ export default function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
         event.preventDefault();
         const target =
-          activeTab.type === "image"
-            ? activeTab.image
-            : selectedIds.size === 1
-            ? images.find((image) => selectedIds.has(image.id))
+          context.activeTab.type === "image"
+            ? context.activeTab.image
+            : context.selectedIds.size === 1
+            ? context.images.find((image) => context.selectedIds.has(image.id))
             : null;
         if (target) {
-          void toggleFavoriteImage(target);
+          void context.toggleFavoriteImage(target);
         }
         return;
       }
@@ -1398,38 +1537,38 @@ export default function App() {
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
         event.preventDefault();
-        handleDuplicateTab();
+        context.handleDuplicateTab();
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w" && event.shiftKey) {
         event.preventDefault();
-        handleCloseOtherTabs(activeTab.id);
+        context.handleCloseOtherTabs(context.activeTab.id);
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w" && event.altKey) {
         event.preventDefault();
-        handleCloseAllTabs();
+        context.handleCloseAllTabs();
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w") {
         event.preventDefault();
-        if (activeTab.id !== "library") {
-          handleCloseTab(activeTab.id);
+        if (context.activeTab.id !== "library") {
+          context.handleCloseTab(context.activeTab.id);
         }
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "tab") {
         event.preventDefault();
         const direction = event.shiftKey ? -1 : 1;
-        if (tabs.length === 0) return;
-        const currentIndex = tabs.findIndex((tab) => tab.id === activeTab.id);
+        if (context.tabs.length === 0) return;
+        const currentIndex = context.tabs.findIndex((tab) => tab.id === context.activeTab.id);
         if (currentIndex === -1) return;
-        const nextIndex = (currentIndex + direction + tabs.length) % tabs.length;
-        setActiveTab(tabs[nextIndex]);
+        const nextIndex = (currentIndex + direction + context.tabs.length) % context.tabs.length;
+        setActiveTab(context.tabs[nextIndex]);
         return;
       }
-      if (activeTab.type === "library") {
-        if (filteredImageCount === 0) return;
+      if (context.activeTab.type === "library") {
+        if (context.filteredImageCount === 0) return;
         const isNavigationKey =
           event.key === "ArrowLeft" ||
           event.key === "ArrowRight" ||
@@ -1442,40 +1581,40 @@ export default function App() {
         if (!isNavigationKey) return;
         event.preventDefault();
 
-        const columns = Math.max(1, gridColumnCount);
-        const currentIndex = Math.min(focusedIndex ?? 0, filteredImageCount - 1);
+        const columns = Math.max(1, context.gridColumnCount);
+        const currentIndex = Math.min(context.focusedIndex ?? 0, context.filteredImageCount - 1);
         let nextIndex = currentIndex;
         const rowStart = Math.floor(currentIndex / columns) * columns;
-        const rowEnd = Math.min(filteredImageCount - 1, rowStart + columns - 1);
-        const pageRows = Math.max(1, Math.floor(gridMetrics.height / rowHeight));
+        const rowEnd = Math.min(context.filteredImageCount - 1, rowStart + columns - 1);
+        const pageRows = Math.max(1, Math.floor(context.gridHeight / context.rowHeight));
         const pageSize = pageRows * columns;
 
         if (event.key === "ArrowLeft") nextIndex = Math.max(0, currentIndex - 1);
-        if (event.key === "ArrowRight") nextIndex = Math.min(filteredImageCount - 1, currentIndex + 1);
+        if (event.key === "ArrowRight") nextIndex = Math.min(context.filteredImageCount - 1, currentIndex + 1);
         if (event.key === "ArrowUp") nextIndex = Math.max(0, currentIndex - columns);
-        if (event.key === "ArrowDown") nextIndex = Math.min(filteredImageCount - 1, currentIndex + columns);
+        if (event.key === "ArrowDown") nextIndex = Math.min(context.filteredImageCount - 1, currentIndex + columns);
         const isCtrlHomeEnd =
           (event.key === "Home" || event.key === "End") && (event.ctrlKey || event.metaKey);
         if (event.key === "Home") {
           nextIndex = isCtrlHomeEnd ? 0 : rowStart;
         }
         if (event.key === "End") {
-          nextIndex = isCtrlHomeEnd ? filteredImageCount - 1 : rowEnd;
+          nextIndex = isCtrlHomeEnd ? context.filteredImageCount - 1 : rowEnd;
         }
         if (event.key === "PageUp") {
           nextIndex = Math.max(0, currentIndex - pageSize);
         }
         if (event.key === "PageDown") {
-          nextIndex = Math.min(filteredImageCount - 1, currentIndex + pageSize);
+          nextIndex = Math.min(context.filteredImageCount - 1, currentIndex + pageSize);
         }
 
-        const nextId = filteredImageIds[nextIndex];
+        const nextId = context.filteredImageIds[nextIndex];
         if (!nextId) return;
         setFocusedIndex(nextIndex);
 
         if (event.shiftKey) {
-          const anchor = selectionAnchor ?? currentIndex;
-          const rangeIds = getRangeIds(anchor, nextIndex);
+          const anchor = context.selectionAnchor ?? currentIndex;
+          const rangeIds = context.getRangeIds(anchor, nextIndex);
           setSelectedIds((prev) => {
             if (event.ctrlKey || event.metaKey) {
               return new Set([...prev, ...rangeIds]);
@@ -1510,55 +1649,32 @@ export default function App() {
         setSelectionAnchor(nextIndex);
         return;
       }
-      if (activeTab.type !== "image") return;
+      if (context.activeTab.type !== "image") return;
 
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        const currentImageId = activeTab.image.id;
-        const currentIndex = navigationImageIds.findIndex((id) => id === currentImageId);
+        const currentImageId = context.activeTab.image.id;
+        const currentIndex = context.navigationImageIds.findIndex((id) => id === currentImageId);
         if (currentIndex === -1) return;
         const delta = event.key === "ArrowLeft" ? -1 : 1;
-        const total = navigationImageIds.length;
+        const total = context.navigationImageIds.length;
         if (total === 0) return;
         const nextIndex = (currentIndex + delta + total) % total;
         event.preventDefault();
-        const nextId = navigationImageIds[nextIndex];
-        const nextImage = imageById.get(nextId);
+        const nextId = context.navigationImageIds[nextIndex];
+        const nextImage = context.imageById.get(nextId);
         if (nextImage) {
-          void handleNavigateImage(nextImage);
+          void context.handleNavigateImage(nextImage);
         }
       }
     };
 
     window.addEventListener("keydown", handleKeyDown, { capture: true });
-    return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [
-    activeTab,
-  navigationImageIds,
-    collections,
-    collectionById,
-    activeCollection,
-    filteredImages,
-  filteredImageIds,
-  filteredImageCount,
-    focusedIndex,
-    gridColumnCount,
-  gridMetrics.height,
-  rowHeight,
-    handleNavigateImage,
-    selectedIds,
-    selectedCollectionIds,
-    selectedImages,
-    startRenameImage,
-    startRenameCollection,
-    toggleFavoriteImage,
-    searchInputRef,
-    selectionAnchor,
-    getRangeIds,
-    tabs,
-    imageById,
-  ]);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, { capture: true });
+    };
+  }, [searchInputRef]);
 
-  const handleCloseTab = (tabId: string) => {
+  function handleCloseTab(tabId: string) {
     if (tabId === "library") return;
     setTabs((prev) => {
       const index = prev.findIndex((tab) => tab.id === tabId);
@@ -1574,30 +1690,30 @@ export default function App() {
 
       return nextTabs;
     });
-  };
+  }
 
-  const handleCloseAllTabs = () => {
+  function handleCloseAllTabs() {
     setTabs([LibraryTab]);
     setActiveTab(LibraryTab);
-  };
+  }
 
-  const handleCloseOtherTabs = (tabId: string) => {
+  function handleCloseOtherTabs(tabId: string) {
     setTabs((prev) => {
       const keep = prev.filter((tab) => tab.id === "library" || tab.id === tabId);
       return keep.length ? keep : [LibraryTab];
     });
     setActiveTab((current) => (current.id === tabId ? current : LibraryTab));
-  };
+  }
 
-  const handleCycleTab = (direction: number) => {
+  function handleCycleTab(direction: number) {
     if (tabs.length === 0) return;
     const currentIndex = tabs.findIndex((tab) => tab.id === activeTab.id);
     if (currentIndex === -1) return;
     const nextIndex = (currentIndex + direction + tabs.length) % tabs.length;
     setActiveTab(tabs[nextIndex]);
-  };
+  }
 
-  const handleDuplicateTab = () => {
+  function handleDuplicateTab() {
     if (activeTab.type !== "image") return;
     const baseId = activeTab.image.id;
     const uniqueSuffix = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}`;
@@ -1631,7 +1747,7 @@ export default function App() {
       }
       viewerFocusRef.current?.focus();
     });
-  };
+  }
 
   const handleRemoveImages = async (
     ids: string[],
@@ -2484,72 +2600,153 @@ export default function App() {
   };
 
   useEffect(() => {
+    menuActionContextRef.current = {
+      selectedIds,
+      selectedCollectionIds,
+      images,
+      collections,
+      activeTab,
+      activeCollection,
+      collectionById,
+      handleAddFolder,
+      handleRemoveSelected,
+      handleRemoveSelectedCollections,
+      handleDeleteSelectedCollectionsFromDisk,
+      handleDeleteImagesFromDisk,
+      handleRevealInFolder,
+  handleOpenInEditor,
+      startRenameImage,
+      startRenameCollection,
+      addFavoriteImages,
+      removeFavoriteImages,
+      addCollectionToFavorites,
+      removeCollectionFromFavorites,
+  handleRescanCollections,
+  handleSelectAllImages,
+  handleInvertImageSelection,
+  handleClearImageSelection,
+  handleSelectAllCollections,
+  handleInvertCollectionSelection,
+  handleClearCollectionSelection,
+      handleCycleTab,
+      handleDuplicateTab,
+      handleCloseTab,
+      handleCloseOtherTabs,
+      handleCloseAllTabs,
+      setAboutOpen,
+    };
+  }, [
+    selectedIds,
+    selectedCollectionIds,
+    images,
+    collections,
+    activeTab,
+    activeCollection,
+    collectionById,
+    handleAddFolder,
+    handleRemoveSelected,
+    handleRemoveSelectedCollections,
+    handleDeleteSelectedCollectionsFromDisk,
+    handleDeleteImagesFromDisk,
+    handleRevealInFolder,
+  handleOpenInEditor,
+    startRenameImage,
+    startRenameCollection,
+    addFavoriteImages,
+    removeFavoriteImages,
+    addCollectionToFavorites,
+    removeCollectionFromFavorites,
+  handleRescanCollections,
+  handleSelectAllImages,
+  handleInvertImageSelection,
+  handleClearImageSelection,
+  handleSelectAllCollections,
+  handleInvertCollectionSelection,
+  handleClearCollectionSelection,
+    handleCycleTab,
+    handleDuplicateTab,
+    handleCloseTab,
+    handleCloseOtherTabs,
+    handleCloseAllTabs,
+    setAboutOpen,
+  ]);
+
+  useEffect(() => {
     if (!bridgeAvailable || !window.comfy?.onMenuAction) return;
     return window.comfy.onMenuAction((action) => {
+      const context = menuActionContextRef.current;
+      const firstSelectedId = context.selectedIds.values().next().value as string | undefined;
       const fallbackImage =
-        activeTab.type === "image" ? activeTab.image : images.find((image) => selectedIds.has(image.id));
+        context.activeTab.type === "image"
+          ? context.activeTab.image
+          : firstSelectedId
+          ? context.images.find((image) => image.id === firstSelectedId)
+          : undefined;
       if (action === "add-folder") {
-        void handleAddFolder();
+        void context.handleAddFolder();
         return;
       }
       if (action === "remove-selected-images") {
-        void handleRemoveSelected();
+        void context.handleRemoveSelected();
         return;
       }
       if (action === "remove-selected-collections") {
-        void handleRemoveSelectedCollections();
+        void context.handleRemoveSelectedCollections();
         return;
       }
       if (action === "rescan-selected-collections") {
-        void handleRescanCollections(Array.from(selectedCollectionIds));
+        void context.handleRescanCollections(Array.from(context.selectedCollectionIds));
         return;
       }
       if (action === "select-all-images") {
-        handleSelectAllImages();
+        context.handleSelectAllImages();
         return;
       }
       if (action === "invert-image-selection") {
-        handleInvertImageSelection();
+        context.handleInvertImageSelection();
         return;
       }
       if (action === "clear-image-selection") {
-        handleClearImageSelection();
+        context.handleClearImageSelection();
         return;
       }
       if (action === "select-all-collections") {
-        handleSelectAllCollections();
+        context.handleSelectAllCollections();
         return;
       }
       if (action === "invert-collection-selection") {
-        handleInvertCollectionSelection();
+        context.handleInvertCollectionSelection();
         return;
       }
       if (action === "clear-collection-selection") {
-        handleClearCollectionSelection();
+        context.handleClearCollectionSelection();
         return;
       }
       if (action === "delete-selected-images-disk") {
-        void handleDeleteImagesFromDisk(Array.from(selectedIds), `${selectedIds.size} selected images`);
+        const ids = Array.from(context.selectedIds);
+        void context.handleDeleteImagesFromDisk(ids, `${ids.length} selected images`);
         return;
       }
       if (action === "delete-selected-collections-disk") {
-        void handleDeleteSelectedCollectionsFromDisk();
+        void context.handleDeleteSelectedCollectionsFromDisk();
         return;
       }
       if (action === "add-selected-images-favorites") {
-        void addFavoriteImages(Array.from(selectedIds), `${selectedIds.size} image(s) added to favourites`);
+        const ids = Array.from(context.selectedIds);
+        void context.addFavoriteImages(ids, `${ids.length} image(s) added to favourites`);
         return;
       }
       if (action === "remove-selected-images-favorites") {
-        void removeFavoriteImages(Array.from(selectedIds), `${selectedIds.size} image(s) removed from favourites`);
+        const ids = Array.from(context.selectedIds);
+        void context.removeFavoriteImages(ids, `${ids.length} image(s) removed from favourites`);
         return;
       }
       if (action === "add-selected-collections-favorites") {
         void (async () => {
-          for (const id of selectedCollectionIds) {
-            const targetCollection = collections.find((entry) => entry.id === id);
+          for (const id of context.selectedCollectionIds) {
+            const targetCollection = context.collections.find((entry) => entry.id === id);
             if (targetCollection) {
-              await addCollectionToFavorites(targetCollection);
+              await context.addCollectionToFavorites(targetCollection);
             }
           }
         })();
@@ -2557,10 +2754,10 @@ export default function App() {
       }
       if (action === "remove-selected-collections-favorites") {
         void (async () => {
-          for (const id of selectedCollectionIds) {
-            const targetCollection = collections.find((entry) => entry.id === id);
+          for (const id of context.selectedCollectionIds) {
+            const targetCollection = context.collections.find((entry) => entry.id === id);
             if (targetCollection) {
-              await removeCollectionFromFavorites(targetCollection);
+              await context.removeCollectionFromFavorites(targetCollection);
             }
           }
         })();
@@ -2568,102 +2765,85 @@ export default function App() {
       }
       if (action === "rename-selected-image") {
         const target =
-          activeTab.type === "image"
-            ? activeTab.image
-            : selectedIds.size === 1
-            ? images.find((image) => selectedIds.has(image.id))
+          context.activeTab.type === "image"
+            ? context.activeTab.image
+            : context.selectedIds.size === 1
+            ? context.images.find((image) => context.selectedIds.has(image.id))
             : null;
         if (target) {
-          startRenameImage(target);
+          context.startRenameImage(target);
         }
         return;
       }
       if (action === "rename-selected-collection") {
         const target =
-          selectedCollectionIds.size === 1
-            ? collections.find((collection) => selectedCollectionIds.has(collection.id))
-            : activeCollection !== "all"
-            ? collectionById.get(activeCollection) ?? null
+          context.selectedCollectionIds.size === 1
+            ? context.collections.find((collection) => context.selectedCollectionIds.has(collection.id))
+            : context.activeCollection !== "all"
+            ? context.collectionById.get(context.activeCollection) ?? null
             : null;
         if (target) {
-          startRenameCollection(target);
+          context.startRenameCollection(target);
         }
         return;
       }
       if (action === "reveal-active-image") {
-        void handleRevealInFolder(fallbackImage?.filePath);
+        void context.handleRevealInFolder(fallbackImage?.filePath);
         return;
       }
       if (action === "edit-active-image") {
-        void handleOpenInEditor(fallbackImage?.filePath);
+        void context.handleOpenInEditor(fallbackImage?.filePath);
         return;
       }
       if (action === "reveal-active-collection") {
         const targetCollection =
-          activeTab.type === "image" ? activeTab.image.collectionId : activeCollection;
-        const collection = targetCollection === "all" ? null : collectionById.get(targetCollection);
-        void handleRevealInFolder(collection?.rootPath);
+          context.activeTab.type === "image" ? context.activeTab.image.collectionId : context.activeCollection;
+        const collection = targetCollection === "all" ? null : context.collectionById.get(targetCollection);
+        void context.handleRevealInFolder(collection?.rootPath);
         return;
       }
       if (action === "tab-next") {
-        handleCycleTab(1);
+        context.handleCycleTab(1);
         return;
       }
       if (action === "tab-prev") {
-        handleCycleTab(-1);
+        context.handleCycleTab(-1);
         return;
       }
       if (action === "tab-duplicate") {
-        handleDuplicateTab();
+        context.handleDuplicateTab();
         return;
       }
       if (action === "tab-close") {
-        if (activeTab.id !== "library") {
-          handleCloseTab(activeTab.id);
+        if (context.activeTab.id !== "library") {
+          context.handleCloseTab(context.activeTab.id);
         }
         return;
       }
       if (action === "tab-close-others") {
-        handleCloseOtherTabs(activeTab.id);
+        context.handleCloseOtherTabs(context.activeTab.id);
         return;
       }
       if (action === "tab-close-all") {
-        handleCloseAllTabs();
+        context.handleCloseAllTabs();
         return;
       }
       if (action === "show-about") {
-        setAboutOpen(true);
+        context.setAboutOpen(true);
         return;
       }
     });
-  }, [
-    bridgeAvailable,
-    handleAddFolder,
-    handleRemoveSelected,
-    handleRemoveSelectedCollections,
-    handleDeleteSelectedCollectionsFromDisk,
-    handleDeleteImagesFromDisk,
-    handleRevealInFolder,
-    selectedIds,
-    images,
-    collections,
-    activeTab,
-    activeCollection,
-    collectionById,
-    selectedCollectionIds,
-    startRenameImage,
-    startRenameCollection,
-    addFavoriteImages,
-    removeFavoriteImages,
-    addCollectionToFavorites,
-    removeCollectionFromFavorites,
-    setAboutOpen,
-    tabs,
-  ]);
+  }, [bridgeAvailable]);
 
   useEffect(() => {
     if (!bridgeAvailable || !window.comfy?.updateMenuState) return;
-    const activeImage = activeTab.type === "image" ? activeTab.image : images.find((image) => selectedIds.has(image.id));
+    const firstSelectedId = selectedIds.values().next().value as string | undefined;
+    const activeImage =
+      activeTab.type === "image"
+        ? activeTab.image
+        : firstSelectedId
+        ? imageById.get(firstSelectedId)
+        : undefined;
     const hasActiveImage = Boolean(activeImage);
     const collectionTargetId =
       activeTab.type === "image" ? activeTab.image.collectionId : activeCollection;
@@ -2691,12 +2871,12 @@ export default function App() {
     bridgeAvailable,
     activeTab,
     activeCollection,
-    images,
     filteredImages,
     collections,
     selectedIds,
     selectedCollectionIds,
     collectionById,
+    imageById,
     isIndexing,
     removalCollectionProgress,
     removalImageProgress,
@@ -3453,7 +3633,7 @@ export default function App() {
                       return (
                         <div
                           key={image.id}
-                          className={`absolute rounded-xl border p-2 text-left transition ${
+                          className={`absolute rounded-xl border p-2 text-left ${
                             isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800"
                           } ${absoluteIndex === focusedIndex ? "ring-2 ring-indigo-400" : ""}`}
                           /* eslint-disable-next-line react/forbid-dom-props */
@@ -3539,7 +3719,7 @@ export default function App() {
                         onDoubleClick={() => {
                           void handleOpenImages([image]);
                         }}
-                        className={`absolute rounded-xl border p-2 text-left transition ${
+                        className={`absolute rounded-xl border p-2 text-left ${
                           isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800 hover:border-slate-600"
                         } ${absoluteIndex === focusedIndex ? "ring-2 ring-indigo-400" : ""}`}
                         /* eslint-disable-next-line react/forbid-dom-props */

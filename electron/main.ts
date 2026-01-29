@@ -86,14 +86,22 @@ const readWindowState = async (): Promise<WindowState | null> => {
 };
 
 const persistWindowState = async (window: BrowserWindow) => {
-    const bounds = window.isMaximized() || window.isMinimized() ? window.getNormalBounds() : window.getBounds();
-    const statePath = path.join(app.getPath("userData"), WINDOW_STATE_FILE);
-    await fs.mkdir(path.dirname(statePath), { recursive: true });
-    const payload: WindowState = {
-        ...bounds,
-        isMaximized: window.isMaximized(),
-    };
-    await fs.writeFile(statePath, JSON.stringify(payload, null, 2));
+    try {
+        if (window.isDestroyed() || window.webContents.isDestroyed()) return;
+        const bounds = window.isMaximized() || window.isMinimized() ? window.getNormalBounds() : window.getBounds();
+        const statePath = path.join(app.getPath("userData"), WINDOW_STATE_FILE);
+        await fs.mkdir(path.dirname(statePath), { recursive: true });
+        const payload: WindowState = {
+            ...bounds,
+            isMaximized: window.isMaximized(),
+        };
+        await fs.writeFile(statePath, JSON.stringify(payload, null, 2));
+    } catch (error) {
+        if (error instanceof Error && error.message.includes("Object has been destroyed")) {
+            return;
+        }
+        console.warn("[comfy-browser] failed to persist window state", error);
+    }
 };
 
 const createWindow = async () => {
@@ -120,19 +128,30 @@ const createWindow = async () => {
             clearTimeout(saveTimeout);
         }
         saveTimeout = setTimeout(() => {
-            void persistWindowState(mainWindow);
+            if (!mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+                void persistWindowState(mainWindow);
+            }
         }, 300);
     };
 
     mainWindow.on("resize", scheduleSave);
     mainWindow.on("move", scheduleSave);
     mainWindow.on("close", () => {
-        void persistWindowState(mainWindow);
+        if (!mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+            void persistWindowState(mainWindow);
+        }
+    });
+
+    mainWindow.on("closed", () => {
+        if (saveTimeout) {
+            clearTimeout(saveTimeout);
+            saveTimeout = null;
+        }
     });
 
     if (process.env.VITE_DEV_SERVER_URL) {
         mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
-        // mainWindow.webContents.openDevTools({ mode: "right" });
+        mainWindow.webContents.openDevTools({ mode: "right" });
     } else {
         mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
     }
