@@ -292,6 +292,7 @@ export default function App() {
   const [isImageLoading, setIsImageLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const activeImageRef = useRef<HTMLImageElement | null>(null);
   const renameCancelRef = useRef(false);
   const renameTargetRef = useRef<string | null>(null);
   const thumbnailMapRef = useRef<Record<string, string>>({});
@@ -701,15 +702,16 @@ export default function App() {
       return searchText.includes(query);
     });
     const sorted = sortImages(visible);
+    const ids = sorted.map((image) => image.id);
     const allImagesMode = activeCollection === "all" && !query;
     if (allImagesMode && sorted.length > gridColumnCount * 3) {
       const bufferRows = 6;
       const startRow = Math.max(0, Math.floor(gridMetrics.scrollTop / rowHeight) - bufferRows);
       const endRow = Math.ceil((gridMetrics.scrollTop + gridMetrics.height) / rowHeight) + bufferRows;
       const windowStartIndex = startRow * gridColumnCount;
-      const windowEndIndex = Math.min(sorted.length, (endRow + 1) * gridColumnCount);
+      const windowEndIndex = Math.min(ids.length, (endRow + 1) * gridColumnCount);
       const windowed = sorted.slice(windowStartIndex, windowEndIndex);
-      return { items: windowed, totalCount: sorted.length, windowStartIndex };
+      return { items: windowed, ids, totalCount: ids.length, windowStartIndex };
     }
     const duration = performance.now() - start;
     if (duration > 50) {
@@ -719,7 +721,7 @@ export default function App() {
         visible: sorted.length,
       });
     }
-    return { items: sorted, totalCount: sorted.length, windowStartIndex: 0 };
+    return { items: sorted, ids, totalCount: ids.length, windowStartIndex: 0 };
   }, [
     images,
     search,
@@ -734,10 +736,18 @@ export default function App() {
   ]);
 
   const filteredImages = filteredImageResult.items;
+  const filteredImageIds = filteredImageResult.ids;
   const filteredImageCount = filteredImageResult.totalCount;
   const filteredWindowStart = filteredImageResult.windowStartIndex;
 
-  const selectedImages = filteredImages.filter((image) => selectedIds.has(image.id));
+  const selectedImages = useMemo(
+    () =>
+      filteredImageIds
+        .filter((id) => selectedIds.has(id))
+        .map((id) => imageById.get(id))
+        .filter((image): image is IndexedImage => Boolean(image)),
+    [filteredImageIds, selectedIds, imageById]
+  );
 
   const collectionIdForNav =
     activeTab.type === "image"
@@ -747,33 +757,7 @@ export default function App() {
       : activeCollection;
   const collectionHighlightId = collectionIdForNav;
 
-  const collectionSortedImages = useMemo(() => {
-    const trimmedQuery = search.trim();
-    if (!trimmedQuery && collectionIdForNav === activeCollection) {
-      return filteredImages;
-    }
-    const visible = images.filter((image) => {
-      if (collectionIdForNav === FAVORITES_ID && !favoriteIds.has(image.id)) {
-        return false;
-      }
-      if (
-        collectionIdForNav !== "all" &&
-        collectionIdForNav !== FAVORITES_ID &&
-        image.collectionId !== collectionIdForNav
-      ) {
-        return false;
-      }
-      return true;
-    });
-    return sortImages(visible);
-  }, [images, collectionIdForNav, favoriteIds, activeCollection, filteredImages, search, sortImages]);
-
-  const navigationImages = useMemo(() => {
-    if (activeTab.type === "image" && search.trim()) {
-      return filteredImages;
-    }
-    return collectionSortedImages;
-  }, [activeTab.type, search, filteredImages, collectionSortedImages]);
+  const navigationImageIds = filteredImageIds;
 
   const totalRows = Math.ceil(filteredImageCount / gridColumnCount);
   const startRow = Math.max(0, Math.floor(gridMetrics.scrollTop / rowHeight) - 1);
@@ -791,10 +775,10 @@ export default function App() {
   const getRangeIds = useCallback(
     (start: number, end: number) => {
       const [from, to] = start < end ? [start, end] : [end, start];
-      const ids = filteredImages.slice(from, to + 1).map((image) => image.id);
+      const ids = filteredImageIds.slice(from, to + 1);
       return new Set(ids);
     },
-    [filteredImages]
+    [filteredImageIds]
   );
 
   const scrollToIndex = useCallback(
@@ -821,7 +805,7 @@ export default function App() {
   }, [focusedIndex, scrollToIndex]);
 
   useEffect(() => {
-    const visibleIds = new Set(filteredImages.map((image) => image.id));
+    const visibleIds = new Set(filteredImageIds);
     setSelectedIds((prev) => {
       if (prev.size === 0) return prev;
       const next = new Set(Array.from(prev).filter((id) => visibleIds.has(id)));
@@ -832,7 +816,25 @@ export default function App() {
       if (filteredImageCount === 0) return null;
       return Math.min(prev, filteredImageCount - 1);
     });
-  }, [filteredImages, filteredImageCount]);
+  }, [filteredImageIds, filteredImageCount]);
+
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (grid) {
+      grid.scrollTop = 0;
+      setGridMetrics((prev) => ({ ...prev, scrollTop: 0 }));
+    }
+    setFocusedIndex(filteredImageCount > 0 ? 0 : null);
+    setSelectionAnchor(filteredImageCount > 0 ? 0 : null);
+    if (filteredImageCount > 0) {
+      const firstId = filteredImageIds[0];
+      if (firstId) {
+        setSelectedIds(new Set([firstId]));
+      }
+    } else {
+      setSelectedIds(new Set());
+    }
+  }, [activeCollection]);
 
   const sortedCollections = useMemo(() => {
     const sorted = [...collections];
@@ -1427,25 +1429,48 @@ export default function App() {
         return;
       }
       if (activeTab.type === "library") {
-        if (filteredImages.length === 0) return;
-        const isArrow =
+        if (filteredImageCount === 0) return;
+        const isNavigationKey =
           event.key === "ArrowLeft" ||
           event.key === "ArrowRight" ||
           event.key === "ArrowUp" ||
-          event.key === "ArrowDown";
-        if (!isArrow) return;
+          event.key === "ArrowDown" ||
+          event.key === "Home" ||
+          event.key === "End" ||
+          event.key === "PageUp" ||
+          event.key === "PageDown";
+        if (!isNavigationKey) return;
         event.preventDefault();
 
         const columns = Math.max(1, gridColumnCount);
-        const currentIndex = focusedIndex ?? 0;
+        const currentIndex = Math.min(focusedIndex ?? 0, filteredImageCount - 1);
         let nextIndex = currentIndex;
+        const rowStart = Math.floor(currentIndex / columns) * columns;
+        const rowEnd = Math.min(filteredImageCount - 1, rowStart + columns - 1);
+        const pageRows = Math.max(1, Math.floor(gridMetrics.height / rowHeight));
+        const pageSize = pageRows * columns;
 
         if (event.key === "ArrowLeft") nextIndex = Math.max(0, currentIndex - 1);
-        if (event.key === "ArrowRight") nextIndex = Math.min(filteredImages.length - 1, currentIndex + 1);
+        if (event.key === "ArrowRight") nextIndex = Math.min(filteredImageCount - 1, currentIndex + 1);
         if (event.key === "ArrowUp") nextIndex = Math.max(0, currentIndex - columns);
-        if (event.key === "ArrowDown") nextIndex = Math.min(filteredImages.length - 1, currentIndex + columns);
+        if (event.key === "ArrowDown") nextIndex = Math.min(filteredImageCount - 1, currentIndex + columns);
+        const isCtrlHomeEnd =
+          (event.key === "Home" || event.key === "End") && (event.ctrlKey || event.metaKey);
+        if (event.key === "Home") {
+          nextIndex = isCtrlHomeEnd ? 0 : rowStart;
+        }
+        if (event.key === "End") {
+          nextIndex = isCtrlHomeEnd ? filteredImageCount - 1 : rowEnd;
+        }
+        if (event.key === "PageUp") {
+          nextIndex = Math.max(0, currentIndex - pageSize);
+        }
+        if (event.key === "PageDown") {
+          nextIndex = Math.min(filteredImageCount - 1, currentIndex + pageSize);
+        }
 
-        const nextId = filteredImages[nextIndex].id;
+        const nextId = filteredImageIds[nextIndex];
+        if (!nextId) return;
         setFocusedIndex(nextIndex);
 
         if (event.shiftKey) {
@@ -1458,6 +1483,12 @@ export default function App() {
             return rangeIds;
           });
           setSelectionAnchor(anchor);
+          return;
+        }
+
+        if (isCtrlHomeEnd) {
+          setSelectedIds(new Set([nextId]));
+          setSelectionAnchor(nextIndex);
           return;
         }
 
@@ -1483,13 +1514,18 @@ export default function App() {
 
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         const currentImageId = activeTab.image.id;
-        const currentIndex = navigationImages.findIndex((image) => image.id === currentImageId);
+        const currentIndex = navigationImageIds.findIndex((id) => id === currentImageId);
         if (currentIndex === -1) return;
         const delta = event.key === "ArrowLeft" ? -1 : 1;
-        const total = navigationImages.length;
+        const total = navigationImageIds.length;
+        if (total === 0) return;
         const nextIndex = (currentIndex + delta + total) % total;
         event.preventDefault();
-        void handleNavigateImage(navigationImages[nextIndex]);
+        const nextId = navigationImageIds[nextIndex];
+        const nextImage = imageById.get(nextId);
+        if (nextImage) {
+          void handleNavigateImage(nextImage);
+        }
       }
     };
 
@@ -1497,14 +1533,17 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [
     activeTab,
-    collectionSortedImages,
-    navigationImages,
+  navigationImageIds,
     collections,
     collectionById,
     activeCollection,
     filteredImages,
+  filteredImageIds,
+  filteredImageCount,
     focusedIndex,
     gridColumnCount,
+  gridMetrics.height,
+  rowHeight,
     handleNavigateImage,
     selectedIds,
     selectedCollectionIds,
@@ -1516,6 +1555,7 @@ export default function App() {
     selectionAnchor,
     getRangeIds,
     tabs,
+    imageById,
   ]);
 
   const handleCloseTab = (tabId: string) => {
@@ -2676,6 +2716,10 @@ export default function App() {
       return;
     }
     setIsImageLoading(true);
+    const image = activeImageRef.current;
+    if (image?.complete && image.naturalWidth > 0) {
+      setIsImageLoading(false);
+    }
   }, [activeTab.type, activeTabContent?.fileUrl]);
 
   const activeZoom = activeTab.type === "image"
@@ -3552,6 +3596,7 @@ export default function App() {
                   className="relative flex flex-1 items-center justify-center overflow-auto p-2 outline-none"
                 >
                   <img
+                    ref={activeImageRef}
                     src={activeTabContent.fileUrl === activeTabContent.filePath ? toComfyUrl(activeTabContent.filePath) : activeTabContent.fileUrl}
                     alt={activeTabContent.fileName}
                     decoding="async"
