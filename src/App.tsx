@@ -131,23 +131,23 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
     findNodeInput(promptNodes, "lora_name"),
     findNodeInput(workflowNodes, "lora_name"),
   ];
-  const loras: string[] = [];
-  const pushLora = (value: MetadataValue | undefined | null) => {
+  const loras: Array<{ name: string; strength?: number }> = [];
+  const pushLora = (value: MetadataValue | undefined | null, strength?: number) => {
     if (!value) return;
     if (typeof value === "string") {
       value
         .split(",")
         .map((entry) => entry.trim())
         .filter(Boolean)
-        .forEach((entry) => loras.push(entry));
+        .forEach((entry) => loras.push({ name: entry, strength }));
       return;
     }
     if (typeof value === "number") {
-      loras.push(String(value));
+      loras.push({ name: String(value), strength });
       return;
     }
     if (Array.isArray(value)) {
-      value.forEach((item) => pushLora(item));
+      value.forEach((item) => pushLora(item, strength));
       return;
     }
     if (typeof value === "object") {
@@ -158,9 +158,9 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
         pickString(record.name) ||
         pickString(record.model);
       if (named) {
-        loras.push(named);
+        loras.push({ name: named, strength });
       }
-      Object.values(record).forEach((entry) => pushLora(entry));
+      Object.values(record).forEach((entry) => pushLora(entry, strength));
     }
   };
   const collectLoras = (value: MetadataValue | undefined | null) => {
@@ -171,9 +171,12 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
     }
     if (typeof value === "object") {
       const record = value as Record<string, MetadataValue>;
+  const strengthModel = typeof record.strength_model === "number" ? record.strength_model : undefined;
+  const strengthClip = typeof record.strength_clip === "number" ? record.strength_clip : undefined;
+      const strength = strengthModel ?? strengthClip;
       Object.entries(record).forEach(([key, entry]) => {
         if (key === "lora_name" || key === "lora" || key === "loraName") {
-          pushLora(entry);
+          pushLora(entry, strength);
         }
         collectLoras(entry);
       });
@@ -183,7 +186,20 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
   loraValues.forEach((value) => pushLora(value));
   collectLoras(parsedPrompt as MetadataValue);
   collectLoras(parsedWorkflow as MetadataValue);
-  const uniqueLoras = Array.from(new Set(loras.filter(Boolean)));
+  const uniqueLoras = Array.from(
+    loras.reduce((map, entry) => {
+      const key = entry.name;
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, entry);
+        return map;
+      }
+      if (existing.strength === undefined && entry.strength !== undefined) {
+        map.set(key, entry);
+      }
+      return map;
+    }, new Map<string, { name: string; strength?: number }>())
+  ).map((entry) => entry[1]);
 
   return {
     promptText,
@@ -3154,23 +3170,28 @@ export default function App() {
                           <div className="space-y-2">
                             <div className="text-xs uppercase tracking-wide text-slate-400">LoRAs</div>
                             <ul className="space-y-2 text-slate-100">
-                              {metadataSummary.loras.map((lora) => (
-                                <li key={lora} className="flex items-start gap-3">
-                                  <span className="min-w-0 flex-1 break-words">• {lora}</span>
-                                  <button
-                                    onClick={() => copyToClipboard(lora, `LoRA: ${lora}`)}
-                                    className={`shrink-0 rounded-[10px] border px-2 py-1 text-xs text-slate-200 transition ${
-                                      lastCopied === `LoRA: ${lora}`
-                                        ? "border-indigo-400 bg-indigo-500/20"
-                                        : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
-                                    }`}
-                                    aria-label={`Copy LoRA ${lora}`}
-                                    title={`Copy ${lora}`}
-                                  >
-                                    ⧉
-                                  </button>
-                                </li>
-                              ))}
+                              {metadataSummary.loras.map((lora) => {
+                                const label =
+                                  lora.strength !== undefined ? `${lora.name} (${lora.strength})` : lora.name;
+                                const copyLabel = `LoRA: ${lora.name}`;
+                                return (
+                                  <li key={lora.name} className="flex items-start gap-3">
+                                    <span className="min-w-0 flex-1 break-words">• {label}</span>
+                                    <button
+                                      onClick={() => copyToClipboard(label, copyLabel)}
+                                      className={`shrink-0 rounded-[10px] border px-2 py-1 text-xs text-slate-200 transition ${
+                                        lastCopied === copyLabel
+                                          ? "border-indigo-400 bg-indigo-500/20"
+                                          : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
+                                      }`}
+                                      aria-label={`Copy LoRA ${lora.name}`}
+                                      title={`Copy ${lora.name}`}
+                                    >
+                                      ⧉
+                                    </button>
+                                  </li>
+                                );
+                              })}
                             </ul>
                           </div>
                         ) : null}
