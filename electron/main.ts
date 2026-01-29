@@ -14,7 +14,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { parsePngMetadata, readPngDimensions, type ParsedPngMetadata } from "../src/lib/pngMetadata";
 
-const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".dib"]);
 
 const COMFY_PROTOCOL = "comfy";
 const WINDOW_STATE_FILE = "window-state.json";
