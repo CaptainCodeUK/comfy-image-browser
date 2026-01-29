@@ -39,6 +39,10 @@ type RemovalRequest = {
   requestId: string;
   promise: Promise<void>;
 };
+type IndexingRequest<T> = {
+  requestId: string;
+  promise: Promise<T>;
+};
 
 type MetadataValue = string | number | boolean | null | MetadataValue[] | { [key: string]: MetadataValue };
 
@@ -294,6 +298,10 @@ export default function App() {
   );
   const removalRequestIdRef = useRef<string | null>(null);
   const removalCancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+  const indexingWorkerRef = useRef<Worker | null>(null);
+  const indexingRequestsRef = useRef(
+    new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void }>()
+  );
 
   const yieldToPaint = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
@@ -353,6 +361,37 @@ export default function App() {
     [runRemovalWorker]
   );
 
+  const runIndexingWorker = useCallback(
+    <T,>(payload: { type: string; data: unknown }) => {
+      const requestId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}`;
+      const promise = new Promise<T>((resolve, reject) => {
+        const worker = indexingWorkerRef.current;
+        if (!worker) {
+          reject(new Error("Indexing worker unavailable"));
+          return;
+        }
+        indexingRequestsRef.current.set(requestId, { resolve, reject });
+        worker.postMessage({ requestId, ...payload });
+      });
+      return { requestId, promise } as IndexingRequest<T>;
+    },
+    []
+  );
+
+  const runIndexingTask = useCallback(
+    async <T,>(payload: { type: string; data: unknown }, fallback: () => Promise<T>) => {
+      try {
+        const request = runIndexingWorker<T>(payload);
+        return await request.promise;
+      } catch (error) {
+        console.error("[comfy-browser] indexing worker failed, falling back", error);
+        return await fallback();
+      }
+    },
+    [runIndexingWorker]
+  );
+
   const bridgeAvailable = typeof window !== "undefined" && !!window.comfy;
 
   useEffect(() => {
@@ -390,6 +429,34 @@ export default function App() {
       removalWorkerRef.current = null;
       removalRequestsRef.current.clear();
       removalRequestIdRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (indexingWorkerRef.current) return;
+    const worker = new Worker(new URL("./lib/indexingWorker.ts", import.meta.url), { type: "module" });
+    indexingWorkerRef.current = worker;
+    worker.onmessage = (event) => {
+      const message = event.data as
+        | { type: "done"; requestId: string; payload: unknown }
+        | { type: "error"; requestId: string; message: string };
+      if (!message || typeof message !== "object" || !("requestId" in message)) return;
+      const entry = indexingRequestsRef.current.get(message.requestId);
+      if (!entry) return;
+      indexingRequestsRef.current.delete(message.requestId);
+      if (message.type === "done") {
+        entry.resolve(message.payload);
+        return;
+      }
+      entry.reject(new Error(message.message || "Indexing worker failed"));
+    };
+    worker.onerror = (event) => {
+      console.error("[comfy-browser] indexing worker error", event);
+    };
+    return () => {
+      worker.terminate();
+      indexingWorkerRef.current = null;
+      indexingRequestsRef.current.clear();
     };
   }, []);
 
@@ -2031,8 +2098,11 @@ export default function App() {
         const filtered = albumPayload.images.filter((image) => !existingFilePaths.has(image.filePath));
         if (filtered.length === 0) continue;
         filtered.forEach((image) => existingFilePaths.add(image.filePath));
-        const added = await addImagesToAlbum(album.id, filtered);
-        newImages.push(...added);
+        const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
+          { type: "add-images", data: { albumId: album.id, images: filtered } },
+          async () => ({ album: null, images: await addImagesToAlbum(album.id, filtered) })
+        );
+        newImages.push(...result.images);
       }
 
       if (newImages.length === 0) {
@@ -2124,13 +2194,21 @@ export default function App() {
 
         const existingAlbum = albumByRoot.get(albumPayload.rootPath);
         if (existingAlbum) {
-          const added = await addImagesToAlbum(existingAlbum.id, filtered);
-          newImages.push(...added);
+          const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
+            { type: "add-images", data: { albumId: existingAlbum.id, images: filtered } },
+            async () => ({ album: null, images: await addImagesToAlbum(existingAlbum.id, filtered) })
+          );
+          newImages.push(...result.images);
           continue;
         }
 
-        const result = await addAlbumWithImages(albumPayload.rootPath, filtered);
-        newAlbums.push(result.album);
+        const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
+          { type: "add-album", data: { rootPath: albumPayload.rootPath, images: filtered } },
+          async () => addAlbumWithImages(albumPayload.rootPath, filtered)
+        );
+        if (result.album) {
+          newAlbums.push(result.album);
+        }
         newImages.push(...result.images);
       }
 
@@ -2550,14 +2628,22 @@ export default function App() {
       filtered.forEach((image) => liveIndex.addedPaths.add(image.filePath));
 
       if (existingAlbum) {
-        const added = await addImagesToAlbum(existingAlbum.id, filtered);
-        const baseImages = added.map((image) => ({ ...image, fileUrl: image.filePath }));
+        const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
+          { type: "add-images", data: { albumId: existingAlbum.id, images: filtered } },
+          async () => ({ album: null, images: await addImagesToAlbum(existingAlbum.id, filtered) })
+        );
+        const baseImages = result.images.map((image) => ({ ...image, fileUrl: image.filePath }));
         setImages((prev) => [...prev, ...baseImages]);
         hydrateFileUrls(baseImages);
       } else {
-        const result = await addAlbumWithImages(payload.rootPath, filtered);
+        const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
+          { type: "add-album", data: { rootPath: payload.rootPath, images: filtered } },
+          async () => addAlbumWithImages(payload.rootPath, filtered)
+        );
+        if (result.album) {
+          setAlbums((prev) => [...prev, result.album!]);
+        }
         const baseImages = result.images.map((image) => ({ ...image, fileUrl: image.filePath }));
-        setAlbums((prev) => [...prev, result.album]);
         setImages((prev) => [...prev, ...baseImages]);
         hydrateFileUrls(baseImages);
       }
@@ -2576,7 +2662,7 @@ export default function App() {
       unsubscribeAlbum();
       unsubscribeComplete();
     };
-  }, [bridgeAvailable, albums, hydrateFileUrls]);
+  }, [bridgeAvailable, albums, hydrateFileUrls, runIndexingTask]);
 
   useEffect(() => {
     const target = gridRef.current;
