@@ -107,9 +107,9 @@ export const removeImagesById = async (ids: string[]) => {
   const db = await dbPromise;
   const tx = db.transaction(["images", "imagePrefs", "favorites"], "readwrite");
   for (const id of ids) {
-    await tx.objectStore("images").delete(id);
-    await tx.objectStore("imagePrefs").delete(id);
-    await tx.objectStore("favorites").delete(id);
+    tx.objectStore("images").delete(id);
+    tx.objectStore("imagePrefs").delete(id);
+    tx.objectStore("favorites").delete(id);
   }
   await tx.done;
 };
@@ -120,10 +120,17 @@ export const removeAlbumById = async (albumId: string) => {
   const imageIndex = tx.objectStore("images").index("albumId");
   const imageKeys = await imageIndex.getAllKeys(albumId);
   for (const key of imageKeys) {
-    await tx.objectStore("images").delete(key);
-    await tx.objectStore("imagePrefs").delete(String(key));
-    await tx.objectStore("favorites").delete(String(key));
+    tx.objectStore("images").delete(key);
+    tx.objectStore("imagePrefs").delete(String(key));
+    tx.objectStore("favorites").delete(String(key));
   }
+  tx.objectStore("albums").delete(albumId);
+  await tx.done;
+};
+
+export const removeAlbumRecord = async (albumId: string) => {
+  const db = await dbPromise;
+  const tx = db.transaction(["albums"], "readwrite");
   await tx.objectStore("albums").delete(albumId);
   await tx.done;
 };

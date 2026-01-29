@@ -8,7 +8,7 @@ import {
   getFavorites,
   getImages,
   removeFavorites,
-  removeAlbumById,
+  removeAlbumRecord,
   removeImagesById,
   setAppPref,
   updateAlbumInfo,
@@ -22,6 +22,7 @@ const CARD_META_HEIGHT = 56;
 const THUMBNAIL_BATCH_SIZE = 12;
 const THUMBNAIL_RETRY_MS = 1200;
 const FILE_URL_BATCH_SIZE = 30;
+const REMOVAL_BATCH_SIZE = 50;
 const FAVORITES_ID = "favorites";
 
 type Tab =
@@ -33,6 +34,11 @@ type AlbumSort = "name-asc" | "name-desc" | "added-desc" | "added-asc";
 type ImageSort = "name-asc" | "name-desc" | "date-desc" | "date-asc" | "size-desc" | "size-asc";
 type ProgressState = { current: number; total: number; label: string } | null;
 type RenameState = { type: "image" | "album"; id: string; value: string } | null;
+type RemovalItem = { id: string; label: string };
+type RemovalRequest = {
+  requestId: string;
+  promise: Promise<void>;
+};
 
 type MetadataValue = string | number | boolean | null | MetadataValue[] | { [key: string]: MetadataValue };
 
@@ -247,8 +253,11 @@ export default function App() {
   const [selectedAlbumIds, setSelectedAlbumIds] = useState<Set<string>>(new Set());
   const [folderProgress, setFolderProgress] = useState<ProgressState>(null);
   const [imageProgress, setImageProgress] = useState<ProgressState>(null);
-  const [removalProgress, setRemovalProgress] = useState<ProgressState>(null);
+  const [removalAlbumProgress, setRemovalAlbumProgress] = useState<ProgressState>(null);
+  const [removalImageProgress, setRemovalImageProgress] = useState<ProgressState>(null);
+  const [removalCanceling, setRemovalCanceling] = useState(false);
   const indexingTokenRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+  const liveIndexRef = useRef<{ active: boolean; basePaths: Set<string>; addedPaths: Set<string> } | null>(null);
   const [cancelingIndex, setCancelingIndex] = useState(false);
   const [gridMetrics, setGridMetrics] = useState({ width: 0, height: 0, scrollTop: 0 });
   const gridRef = useRef<HTMLDivElement | null>(null);
@@ -272,11 +281,116 @@ export default function App() {
   const thumbnailTokenRef = useRef(0);
   const [thumbnailRetryTick, setThumbnailRetryTick] = useState(0);
   const metadataCacheRef = useRef<Map<string, ReturnType<typeof extractMetadataSummary>>>(new Map());
+  const removalWorkerRef = useRef<Worker | null>(null);
+  const removalRequestsRef = useRef(
+    new Map<
+      string,
+      {
+        resolve: () => void;
+        reject: (error: Error) => void;
+        onProgress?: (progress: { current: number; total: number; label: string }) => void;
+      }
+    >()
+  );
+  const removalRequestIdRef = useRef<string | null>(null);
+  const removalCancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+
+  const yieldToPaint = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+  const runRemovalWorker = useCallback(
+    (
+      payload:
+        | { type: "remove-images"; items: RemovalItem[]; batchSize: number }
+        | { type: "remove-album"; albumId: string; items: RemovalItem[]; batchSize: number },
+      onProgress?: (progress: { current: number; total: number; label: string }) => void
+    ) => {
+      const requestId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}`;
+      const promise = new Promise<void>((resolve, reject) => {
+        const worker = removalWorkerRef.current;
+        if (!worker) {
+          reject(new Error("Removal worker unavailable"));
+          return;
+        }
+        removalRequestsRef.current.set(requestId, { resolve, reject, onProgress });
+        worker.postMessage({ ...payload, requestId });
+      });
+      return { requestId, promise } as RemovalRequest;
+    },
+    []
+  );
+
+  const runRemovalTask = useCallback(
+    async (
+      payload:
+        | { type: "remove-images"; items: RemovalItem[]; batchSize: number }
+        | { type: "remove-album"; albumId: string; items: RemovalItem[]; batchSize: number },
+      onProgress: (progress: { current: number; total: number; label: string }) => void,
+      fallback: () => Promise<void>
+    ) => {
+      removalCancelRef.current = { cancelled: false };
+      setRemovalCanceling(false);
+      let request: RemovalRequest | null = null;
+      try {
+        request = runRemovalWorker(payload, onProgress);
+        removalRequestIdRef.current = request.requestId;
+        await request.promise;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Removal failed";
+        if (message.toLowerCase().includes("cancel")) {
+          console.warn("[comfy-browser] removal canceled");
+          setRemovalAlbumProgress(null);
+          setRemovalImageProgress(null);
+          return;
+        }
+        console.error("[comfy-browser] removal worker failed, falling back", error);
+        await fallback();
+      } finally {
+        removalRequestIdRef.current = null;
+        setRemovalCanceling(false);
+      }
+    },
+    [runRemovalWorker]
+  );
 
   const bridgeAvailable = typeof window !== "undefined" && !!window.comfy;
 
   useEffect(() => {
     console.log("[comfy-browser] UI mounted");
+  }, []);
+
+  useEffect(() => {
+    if (removalWorkerRef.current) return;
+    const worker = new Worker(new URL("./lib/removalWorker.ts", import.meta.url), { type: "module" });
+    removalWorkerRef.current = worker;
+    worker.onmessage = (event) => {
+      const message = event.data as
+        | { type: "progress"; requestId: string; current: number; total: number; label: string }
+        | { type: "done"; requestId: string }
+        | { type: "error"; requestId: string; message: string };
+      if (!message || typeof message !== "object" || !("requestId" in message)) return;
+      const entry = removalRequestsRef.current.get(message.requestId);
+      if (!entry) return;
+      if (message.type === "progress") {
+        entry.onProgress?.({ current: message.current, total: message.total, label: message.label });
+        return;
+      }
+      removalRequestsRef.current.delete(message.requestId);
+      if (message.type === "done") {
+        entry.resolve();
+        return;
+      }
+      entry.reject(new Error(message.message || "Removal worker failed"));
+    };
+    worker.onerror = (event) => {
+      console.error("[comfy-browser] removal worker error", event);
+    };
+    return () => {
+      worker.terminate();
+      removalWorkerRef.current = null;
+      removalRequestsRef.current.clear();
+      removalRequestIdRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -1274,8 +1388,31 @@ export default function App() {
       const confirmed = window.confirm(`Remove ${label} from the index?`);
       if (!confirmed) return;
     }
+    const items = ids.map((id) => ({ id, label: imageById.get(id)?.fileName ?? "Image" }));
+    setRemovalImageProgress({ current: 0, total: items.length, label: "" });
+    await yieldToPaint();
+    await runRemovalTask(
+      { type: "remove-images", items, batchSize: REMOVAL_BATCH_SIZE },
+      (progress) => setRemovalImageProgress(progress),
+      async () => {
+        let batch: string[] = [];
+        for (const item of items) {
+          if (removalCancelRef.current.cancelled) {
+            throw new Error("Removal cancelled");
+          }
+          batch.push(item.id);
+          if (batch.length >= REMOVAL_BATCH_SIZE) {
+            await removeImagesById(batch);
+            batch = [];
+          }
+        }
+        if (batch.length > 0) {
+          await removeImagesById(batch);
+        }
+      }
+    );
+    setRemovalImageProgress(null);
     const idSet = new Set(ids);
-    await removeImagesById(ids);
     setFavoriteIds((prev) => {
       if (prev.size === 0) return prev;
       const next = new Set(prev);
@@ -1290,6 +1427,10 @@ export default function App() {
     });
     setTabs((prev) => prev.filter((tab) => tab.type === "library" || !idSet.has(tab.id)));
     setActiveTab((current) => (current.type === "image" && idSet.has(current.id) ? LibraryTab : current));
+    if (ids.length > 1) {
+      setRemovalImageProgress({ current: ids.length, total: ids.length, label: "" });
+      setRemovalImageProgress(null);
+    }
   };
 
   function startRenameImage(image: IndexedImage) {
@@ -1491,27 +1632,58 @@ export default function App() {
   }
 
   const removeAlbumFromIndex = async (albumId: string) => {
-    await removeAlbumById(albumId);
+    console.log("[comfy-browser] removing album from index", albumId);
+    const removedImages = images.filter((image) => image.albumId === albumId);
+    const removedItems = removedImages.map((image) => ({ id: image.id, label: image.fileName }));
+    const removedImageIds = removedItems.map((item) => item.id);
+    if (removedItems.length > 0) {
+      setRemovalImageProgress({ current: 0, total: removedItems.length, label: "" });
+      await yieldToPaint();
+    }
+    await runRemovalTask(
+      { type: "remove-album", albumId, items: removedItems, batchSize: REMOVAL_BATCH_SIZE },
+      (progress) => {
+        setRemovalImageProgress(progress);
+        console.log("[comfy-browser] removing album image", {
+          albumId,
+          index: progress.current,
+          total: progress.total,
+          fileName: progress.label,
+        });
+      },
+      async () => {
+        let batch: string[] = [];
+        for (const item of removedItems) {
+          if (removalCancelRef.current.cancelled) {
+            throw new Error("Removal cancelled");
+          }
+          batch.push(item.id);
+          if (batch.length >= REMOVAL_BATCH_SIZE) {
+            await removeImagesById(batch);
+            batch = [];
+          }
+        }
+        if (batch.length > 0) {
+          await removeImagesById(batch);
+        }
+        await removeAlbumRecord(albumId);
+      }
+    );
+  setRemovalImageProgress(null);
+    console.log("[comfy-browser] removed album images", { albumId, count: removedImageIds.length });
+    const removedIdSet = new Set(removedImageIds);
     setAlbums((prev) => prev.filter((album) => album.id !== albumId));
     setFavoriteIds((prev) => {
       if (prev.size === 0) return prev;
       const next = new Set(prev);
-      images.forEach((image) => {
-        if (image.albumId === albumId) {
-          next.delete(image.id);
-        }
-      });
+      removedImageIds.forEach((id) => next.delete(id));
       return next;
     });
-    setImages((prev) => prev.filter((image) => image.albumId !== albumId));
-    setTabs((prev) => prev.filter((tab) => tab.type === "library" || tab.image.albumId !== albumId));
+    setImages((prev) => prev.filter((image) => !removedIdSet.has(image.id)));
+    setTabs((prev) => prev.filter((tab) => tab.type === "library" || !removedIdSet.has(tab.image.id)));
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      images.forEach((image) => {
-        if (image.albumId === albumId) {
-          next.delete(image.id);
-        }
-      });
+      removedImageIds.forEach((id) => next.delete(id));
       return next;
     });
     if (activeAlbum === albumId) {
@@ -1528,9 +1700,13 @@ export default function App() {
     const albumName = albums.find((album) => album.id === albumId)?.name ?? "this album";
     const confirmed = window.confirm(`Remove ${albumName} from the index?`);
     if (!confirmed) return;
-    setRemovalProgress({ current: 0, total: 1, label: albumName });
+    console.log("[comfy-browser] starting album removal", { albumId, albumName });
+    setRemovalAlbumProgress({ current: 0, total: 1, label: albumName });
+    await yieldToPaint();
     await removeAlbumFromIndex(albumId);
-    setRemovalProgress(null);
+    await yieldToPaint();
+    setRemovalAlbumProgress(null);
+    console.log("[comfy-browser] finished album removal", { albumId, albumName });
   };
 
   const handleToggleAlbumSelection = (albumId: string) => {
@@ -1551,14 +1727,20 @@ export default function App() {
     if (!confirmed) return;
     const ids = Array.from(selectedAlbumIds);
     let index = 0;
-    setRemovalProgress({ current: 0, total: ids.length, label: "" });
+    console.log("[comfy-browser] starting bulk album removal", { count: ids.length });
+    setRemovalAlbumProgress({ current: 0, total: ids.length, label: "" });
+    await yieldToPaint();
     for (const id of ids) {
       index += 1;
       const name = albums.find((album) => album.id === id)?.name ?? "Album";
-      setRemovalProgress({ current: index, total: ids.length, label: name });
+      console.log("[comfy-browser] removing album", { index, total: ids.length, albumId: id, name });
+      setRemovalAlbumProgress({ current: index, total: ids.length, label: name });
+      await yieldToPaint();
       await removeAlbumFromIndex(id);
+      await yieldToPaint();
     }
-    setRemovalProgress(null);
+    setRemovalAlbumProgress(null);
+    console.log("[comfy-browser] finished bulk album removal", { count: ids.length });
   };
 
   const handleSelectAllImages = () => {
@@ -1801,6 +1983,11 @@ export default function App() {
     setCancelingIndex(false);
     setFolderProgress(null);
     setImageProgress(null);
+    liveIndexRef.current = {
+      active: true,
+      basePaths: new Set(images.map((image) => image.filePath)),
+      addedPaths: new Set(),
+    };
     try {
       const targetImageList = images.filter((image) => targets.some((album) => album.id === image.albumId));
       const missingPaths = window.comfy?.findMissingFiles
@@ -1830,6 +2017,11 @@ export default function App() {
       }
 
       const existingFilePaths = new Set(images.map((image) => image.filePath));
+      const liveIndex = liveIndexRef.current;
+      if (liveIndex) {
+        liveIndex.basePaths.forEach((path) => existingFilePaths.add(path));
+        liveIndex.addedPaths.forEach((path) => existingFilePaths.add(path));
+      }
       const albumByRoot = new Map(targets.map((album) => [album.rootPath, album]));
       const newImages: IndexedImage[] = [];
 
@@ -1853,6 +2045,9 @@ export default function App() {
       setImages((prev) => [...prev, ...baseImages]);
       hydrateFileUrls(baseImages);
     } finally {
+      if (liveIndexRef.current) {
+        liveIndexRef.current.active = false;
+      }
       setIsIndexing(false);
     }
   };
@@ -1868,6 +2063,11 @@ export default function App() {
     setCancelingIndex(false);
     setFolderProgress(null);
     setImageProgress(null);
+    liveIndexRef.current = {
+      active: true,
+      basePaths: new Set(images.map((image) => image.filePath)),
+      addedPaths: new Set(),
+    };
     try {
       const folderPaths = await window.comfy.selectFolders();
       if (!folderPaths.length) {
@@ -1908,6 +2108,11 @@ export default function App() {
       }
 
       const existingFilePaths = new Set(images.map((image) => image.filePath));
+      const liveIndex = liveIndexRef.current;
+      if (liveIndex) {
+        liveIndex.basePaths.forEach((path) => existingFilePaths.add(path));
+        liveIndex.addedPaths.forEach((path) => existingFilePaths.add(path));
+      }
       const albumByRoot = new Map(albums.map((album) => [album.rootPath, album]));
       const newAlbums: Album[] = [];
       const newImages: IndexedImage[] = [];
@@ -1945,6 +2150,9 @@ export default function App() {
         hydrateFileUrls(baseImages);
       }
     } finally {
+      if (liveIndexRef.current) {
+        liveIndexRef.current.active = false;
+      }
       setIsIndexing(false);
     }
   };
@@ -1953,6 +2161,9 @@ export default function App() {
     if (!bridgeAvailable || !window.comfy?.cancelIndexing) return;
     if (cancelingIndex) return;
     indexingTokenRef.current.cancelled = true;
+    if (liveIndexRef.current) {
+      liveIndexRef.current.active = false;
+    }
     setCancelingIndex(true);
     setIsIndexing(false);
     setFolderProgress(null);
@@ -1960,6 +2171,17 @@ export default function App() {
     await window.comfy.cancelIndexing();
     setToastMessage("Indexing canceled");
     setLastCopied("Indexing canceled");
+  };
+
+  const handleCancelRemoval = () => {
+    if (removalCanceling) return;
+    removalCancelRef.current.cancelled = true;
+    setRemovalCanceling(true);
+    const requestId = removalRequestIdRef.current;
+    const worker = removalWorkerRef.current;
+    if (requestId && worker) {
+      worker.postMessage({ type: "cancel", requestId });
+    }
   };
 
   useEffect(() => {
@@ -2316,17 +2538,45 @@ export default function App() {
     const unsubscribeImage = window.comfy.onIndexingImage((payload) => {
       setImageProgress({ current: payload.current, total: payload.total, label: payload.fileName });
     });
+    const unsubscribeAlbum = window.comfy.onIndexingAlbum(async (payload) => {
+      const liveIndex = liveIndexRef.current;
+      if (!liveIndex?.active) return;
+      const existingAlbum = albums.find((album) => album.rootPath === payload.rootPath);
+      const existingPaths = new Set<string>();
+      liveIndex.basePaths.forEach((path) => existingPaths.add(path));
+      liveIndex.addedPaths.forEach((path) => existingPaths.add(path));
+      const filtered = payload.images.filter((image) => !existingPaths.has(image.filePath));
+      if (filtered.length === 0) return;
+      filtered.forEach((image) => liveIndex.addedPaths.add(image.filePath));
+
+      if (existingAlbum) {
+        const added = await addImagesToAlbum(existingAlbum.id, filtered);
+        const baseImages = added.map((image) => ({ ...image, fileUrl: image.filePath }));
+        setImages((prev) => [...prev, ...baseImages]);
+        hydrateFileUrls(baseImages);
+      } else {
+        const result = await addAlbumWithImages(payload.rootPath, filtered);
+        const baseImages = result.images.map((image) => ({ ...image, fileUrl: image.filePath }));
+        setAlbums((prev) => [...prev, result.album]);
+        setImages((prev) => [...prev, ...baseImages]);
+        hydrateFileUrls(baseImages);
+      }
+    });
     const unsubscribeComplete = window.comfy.onIndexingComplete(() => {
       setFolderProgress(null);
       setImageProgress(null);
+      if (liveIndexRef.current) {
+        liveIndexRef.current.active = false;
+      }
     });
 
     return () => {
       unsubscribeFolder();
       unsubscribeImage();
+      unsubscribeAlbum();
       unsubscribeComplete();
     };
-  }, [bridgeAvailable]);
+  }, [bridgeAvailable, albums, hydrateFileUrls]);
 
   useEffect(() => {
     const target = gridRef.current;
@@ -2419,23 +2669,61 @@ export default function App() {
           </div>
         </div>
       ) : null}
-      {removalProgress ? (
+      {removalAlbumProgress || removalImageProgress ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/70">
           <div className="pointer-events-auto rounded-2xl border border-slate-800 bg-slate-950/90 px-6 py-4 text-sm text-slate-100 shadow-xl">
             <div className="flex items-center gap-3 h-full">
               <div className="h-3 w-3 animate-pulse rounded-full bg-rose-400" />
-              <span>Removing albums…</span>
+              <span>{removalAlbumProgress ? "Removing albums…" : "Removing images…"}</span>
             </div>
             <div className="mt-4 space-y-3 text-xs text-slate-300">
-              <div>
-                <div className="flex items-center justify-between">
-                  <span>Albums</span>
-                  <span>{`${removalProgress.current} / ${removalProgress.total}`}</span>
+              {removalAlbumProgress ? (
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span>Albums</span>
+                    <span>{`${removalAlbumProgress.current} / ${removalAlbumProgress.total}`}</span>
+                  </div>
+                  <progress
+                    className="progress-bar"
+                    value={removalAlbumProgress.current}
+                    max={removalAlbumProgress.total}
+                  />
+                  <div
+                    className="mt-1 truncate text-[11px] text-slate-400"
+                    title={removalAlbumProgress.label}
+                  >
+                    {removalAlbumProgress.label}
+                  </div>
                 </div>
-                <progress className="progress-bar" value={removalProgress.current} max={removalProgress.total} />
-                <div className="mt-1 truncate text-[11px] text-slate-400" title={removalProgress.label}>
-                  {removalProgress.label}
+              ) : null}
+              {removalImageProgress ? (
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span>Images</span>
+                    <span>{`${removalImageProgress.current} / ${removalImageProgress.total}`}</span>
+                  </div>
+                  <progress
+                    className="progress-bar"
+                    value={removalImageProgress.current}
+                    max={removalImageProgress.total}
+                  />
+                  <div
+                    className="mt-1 truncate text-[11px] text-slate-400"
+                    title={removalImageProgress.label}
+                  >
+                    {removalImageProgress.label}
+                  </div>
                 </div>
+              ) : null}
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleCancelRemoval}
+                  disabled={removalCanceling}
+                  className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-60"
+                >
+                  {removalCanceling ? "Canceling…" : "Cancel"}
+                </button>
               </div>
             </div>
           </div>

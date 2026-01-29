@@ -102,6 +102,7 @@ declare global {
       ) => () => void;
       onIndexingFolder: (callback: (payload: { current: number; total: number; folder: string }) => void) => () => void;
       onIndexingImage: (callback: (payload: { current: number; total: number; fileName: string }) => void) => () => void;
+      onIndexingAlbum: (callback: (payload: { rootPath: string; images: IndexedImagePayload[] }) => void) => () => void;
       onIndexingComplete: (callback: () => void) => () => void;
     };
   }

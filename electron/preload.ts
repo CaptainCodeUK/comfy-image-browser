@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { IndexedImagePayload } from "../src/lib/types";
 
 contextBridge.exposeInMainWorld("comfy", {
   selectFolders: () => ipcRenderer.invoke("comfy:select-folders"),
@@ -53,6 +54,14 @@ contextBridge.exposeInMainWorld("comfy", {
     ) => callback(payload);
     ipcRenderer.on("comfy:indexing-image", listener);
     return () => ipcRenderer.removeListener("comfy:indexing-image", listener);
+  },
+  onIndexingAlbum: (callback: (payload: { rootPath: string; images: IndexedImagePayload[] }) => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: { rootPath: string; images: IndexedImagePayload[] }
+    ) => callback(payload);
+    ipcRenderer.on("comfy:indexing-album", listener);
+    return () => ipcRenderer.removeListener("comfy:indexing-album", listener);
   },
   onIndexingComplete: (callback: () => void) => {
     const listener = () => callback();

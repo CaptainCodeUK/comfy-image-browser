@@ -608,6 +608,11 @@ ipcMain.handle(
                 images.push(await buildImagePayload(filePath, albumFolder.rootPath));
             }
 
+            _event.sender.send("comfy:indexing-album", {
+                rootPath: albumFolder.rootPath,
+                images,
+            });
+
             albums.push({ rootPath: albumFolder.rootPath, images });
         }
 
