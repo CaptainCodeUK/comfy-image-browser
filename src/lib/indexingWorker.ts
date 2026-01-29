@@ -1,19 +1,19 @@
 /// <reference lib="webworker" />
 
-import { addAlbumWithImages, addImagesToAlbum } from "./db";
-import type { Album, IndexedImage, IndexedImagePayload } from "./types";
+import { addCollectionWithImages, addImagesToCollection } from "./db";
+import type { Collection, IndexedImage, IndexedImagePayload } from "./types";
 
 type AddImagesMessage = {
   type: "add-images";
   requestId: string;
   data: {
-    albumId: string;
+    collectionId: string;
     images: IndexedImagePayload[];
   };
 };
 
-type AddAlbumMessage = {
-  type: "add-album";
+type AddCollectionMessage = {
+  type: "add-collection";
   requestId: string;
   data: {
     rootPath: string;
@@ -21,13 +21,13 @@ type AddAlbumMessage = {
   };
 };
 
-type IncomingMessage = AddImagesMessage | AddAlbumMessage;
+type IncomingMessage = AddImagesMessage | AddCollectionMessage;
 
 type DoneMessage = {
   type: "done";
   requestId: string;
   payload: {
-    album: Album | null;
+    collection: Collection | null;
     images: IndexedImage[];
   };
 };
@@ -51,16 +51,16 @@ self.onmessage = async (event: MessageEvent<IncomingMessage>) => {
   if (!message || typeof message !== "object" || !message.type) return;
   try {
     if (message.type === "add-images") {
-      const added = await addImagesToAlbum(message.data.albumId, message.data.images);
-      postDone({ type: "done", requestId: message.requestId, payload: { album: null, images: added } });
+      const added = await addImagesToCollection(message.data.collectionId, message.data.images);
+      postDone({ type: "done", requestId: message.requestId, payload: { collection: null, images: added } });
       return;
     }
-    if (message.type === "add-album") {
-      const result = await addAlbumWithImages(message.data.rootPath, message.data.images);
+    if (message.type === "add-collection") {
+      const result = await addCollectionWithImages(message.data.rootPath, message.data.images);
       postDone({
         type: "done",
         requestId: message.requestId,
-        payload: { album: result.album, images: result.images },
+        payload: { collection: result.collection, images: result.images },
       });
     }
   } catch (error) {

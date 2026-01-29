@@ -4,14 +4,14 @@ Comfy Image Browser is a desktop image viewer and cataloger, with some special f
 
 ## Feature highlights
 
-- Add folders (including subfolders) from the UI and rescan albums for new images.
+- Add folders (including subfolders) from the UI and rescan collections for new images.
 - Icon grid with adjustable thumbnail size and keyboard navigation.
 - Tabbed image viewer with easy tab management and keyboard shortcuts.
-- Simple image and album management, including rename for images and albums.
-- Favourites virtual album with star toggles, searchable like any album easy favaourites management.
+- Simple image and collection management, including rename for images and collections.
+- Favourites virtual collection with star toggles, searchable like any collection easy favaourites management.
 - Local thumbnail cache (`.thumbs`) for faster repeat browsing.
-- Parse ComfyUI PNG metadata and search by filename, album, or metadata fields.
-- Easily add and remove images, albums or even folders full of albums.
+- Parse ComfyUI PNG metadata and search by filename, collection, or metadata fields.
+- Easily add and remove images, collections or even folders full of collections.
 
 ## Local-only storage
 
@@ -34,20 +34,20 @@ Pre-built binaries are published on the GitHub Releases page for this repository
 - **Ctrl/Cmd + Alt + W**: Close all tabs.
 - **Ctrl + Tab / Ctrl + Shift + Tab**: Cycle tabs (next/previous).
 
-#### Image and Album Management
+#### Image and Collection Management
 - **Ctrl/Cmd + B**: Toggle favourite for the active image or a single selected image.
 - **Ctrl/Cmd + Alt + D**: Toggle DevTools.
 - **F2**: Rename selected image.
-- **Shift+F2**: Rename selected album.
-- **Ctrl/Cmd + A**: Select all images (Shift to select all albums).
-- **Ctrl/Cmd + I**: Invert selection (Shift to invert album selection).
-- **Ctrl/Cmd + Backspace**: Clear selection (Shift to clear album selection).
+- **Shift+F2**: Rename selected collection.
+- **Ctrl/Cmd + A**: Select all images (Shift to select all collections).
+- **Ctrl/Cmd + I**: Invert selection (Shift to invert collection selection).
+- **Ctrl/Cmd + Backspace**: Clear selection (Shift to clear collection selection).
 
 ## Favourites
 
 - Use the star toggle (★ / ☆) in the grid or image viewer to add or remove favourites.
-- Adding an album to favourites marks all images in that album as favourites.
-- The **Favourites** virtual album is always visible and fully searchable.
+- Adding a collection to favourites marks all images in that collection as favourites.
+- The **Favourites** virtual collection is always visible and fully searchable.
 
 ## Development (Vite + Electron)
 ### (if you want to build it yourself or contribute code)

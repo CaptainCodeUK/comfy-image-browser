@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld("comfy", {
   showContextMenu: (
     payload:
       | { type: "image"; imageId: string; label: string; selectedCount: number; isSelected: boolean }
-      | { type: "album"; albumId: string; label: string; selectedCount: number; isSelected: boolean }
+      | { type: "collection"; collectionId: string; label: string; selectedCount: number; isSelected: boolean }
   ) => ipcRenderer.invoke("comfy:show-context-menu", payload),
   deleteFilesFromDisk: (payload: { paths: string[]; label: string; detail?: string }) =>
     ipcRenderer.invoke("comfy:delete-files-from-disk", payload),
@@ -28,13 +28,16 @@ contextBridge.exposeInMainWorld("comfy", {
   toggleDevTools: () => ipcRenderer.invoke("comfy:toggle-devtools"),
   updateMenuState: (state: {
     hasActiveImage: boolean;
-    hasActiveAlbum: boolean;
+    hasActiveCollection: boolean;
     hasSelectedImages: boolean;
-    hasSelectedAlbums: boolean;
+    hasSelectedCollections: boolean;
     hasSingleSelectedImage: boolean;
-    hasSingleSelectedAlbum: boolean;
+    hasSingleSelectedCollection: boolean;
     hasImages: boolean;
-    hasAlbums: boolean;
+    hasCollections: boolean;
+    isIndexing: boolean;
+    isRemoving: boolean;
+    isDeleting: boolean;
   }) => ipcRenderer.send("comfy:update-menu-state", state),
   onMenuAction: (callback: (action: string) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, action: string) => callback(action);
@@ -55,13 +58,13 @@ contextBridge.exposeInMainWorld("comfy", {
     ipcRenderer.on("comfy:indexing-image", listener);
     return () => ipcRenderer.removeListener("comfy:indexing-image", listener);
   },
-  onIndexingAlbum: (callback: (payload: { rootPath: string; images: IndexedImagePayload[] }) => void) => {
+  onIndexingCollection: (callback: (payload: { rootPath: string; images: IndexedImagePayload[] }) => void) => {
     const listener = (
       _event: Electron.IpcRendererEvent,
       payload: { rootPath: string; images: IndexedImagePayload[] }
     ) => callback(payload);
-    ipcRenderer.on("comfy:indexing-album", listener);
-    return () => ipcRenderer.removeListener("comfy:indexing-album", listener);
+    ipcRenderer.on("comfy:indexing-collection", listener);
+    return () => ipcRenderer.removeListener("comfy:indexing-collection", listener);
   },
   onIndexingComplete: (callback: () => void) => {
     const listener = () => callback();

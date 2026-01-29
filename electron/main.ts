@@ -54,7 +54,7 @@ protocol.registerSchemesAsPrivileged([
 type IndexedImagePayload = {
     filePath: string;
     fileName: string;
-    albumRoot: string;
+    collectionRoot: string;
     sizeBytes: number;
     createdAt: string;
     width?: number;
@@ -188,72 +188,72 @@ const buildAppMenu = () => {
     });
 
     template.push({
-        label: "Album",
+        label: "Collection",
         submenu: [
             {
-                id: "menu-reveal-active-album",
-                label: "Reveal Active Album in File Manager",
+                id: "menu-reveal-active-collection",
+                label: "Reveal Active Collection in File Manager",
                 enabled: false,
-                click: () => sendMenuAction("reveal-active-album"),
+                click: () => sendMenuAction("reveal-active-collection"),
             },
             {
-                id: "menu-rename-selected-album",
-                label: "Rename Selected Album…",
+                id: "menu-rename-selected-collection",
+                label: "Rename Selected Collection…",
                 enabled: false,
-                click: () => sendMenuAction("rename-selected-album"),
+                click: () => sendMenuAction("rename-selected-collection"),
             },
             {
-                id: "menu-add-selected-albums-favorites",
-                label: "Add Selected Albums to Favourites",
+                id: "menu-add-selected-collections-favorites",
+                label: "Add Selected Collections to Favourites",
                 enabled: false,
-                click: () => sendMenuAction("add-selected-albums-favorites"),
+                click: () => sendMenuAction("add-selected-collections-favorites"),
             },
             {
-                id: "menu-remove-selected-albums-favorites",
-                label: "Remove Selected Albums from Favourites",
+                id: "menu-remove-selected-collections-favorites",
+                label: "Remove Selected Collections from Favourites",
                 enabled: false,
-                click: () => sendMenuAction("remove-selected-albums-favorites"),
+                click: () => sendMenuAction("remove-selected-collections-favorites"),
             },
             {
-                id: "menu-rescan-selected-albums",
-                label: "Rescan Selected Albums",
+                id: "menu-rescan-selected-collections",
+                label: "Rescan Selected Collections",
                 enabled: false,
-                click: () => sendMenuAction("rescan-selected-albums"),
-            },
-            { type: "separator" },
-            {
-                id: "menu-remove-selected-albums",
-                label: "Remove Selected Albums from Index…",
-                enabled: false,
-                click: () => sendMenuAction("remove-selected-albums"),
-            },
-            {
-                id: "menu-delete-selected-albums-disk",
-                label: "Delete Selected Albums from Disk…",
-                enabled: false,
-                click: () => sendMenuAction("delete-selected-albums-disk"),
+                click: () => sendMenuAction("rescan-selected-collections"),
             },
             { type: "separator" },
             {
-                id: "menu-select-all-albums",
-                label: "Select All Albums",
+                id: "menu-remove-selected-collections",
+                label: "Remove Selected Collections from Index…",
+                enabled: false,
+                click: () => sendMenuAction("remove-selected-collections"),
+            },
+            {
+                id: "menu-delete-selected-collections-disk",
+                label: "Delete Selected Collections from Disk…",
+                enabled: false,
+                click: () => sendMenuAction("delete-selected-collections-disk"),
+            },
+            { type: "separator" },
+            {
+                id: "menu-select-all-collections",
+                label: "Select All Collections",
                 enabled: false,
                 accelerator: "CmdOrCtrl+Shift+A",
-                click: () => sendMenuAction("select-all-albums"),
+                click: () => sendMenuAction("select-all-collections"),
             },
             {
-                id: "menu-invert-album-selection",
-                label: "Invert Album Selection",
+                id: "menu-invert-collection-selection",
+                label: "Invert Collection Selection",
                 enabled: false,
                 accelerator: "CmdOrCtrl+Shift+I",
-                click: () => sendMenuAction("invert-album-selection"),
+                click: () => sendMenuAction("invert-collection-selection"),
             },
             {
-                id: "menu-clear-album-selection",
-                label: "Clear Album Selection",
+                id: "menu-clear-collection-selection",
+                label: "Clear Collection Selection",
                 enabled: false,
                 accelerator: "CmdOrCtrl+Shift+Backspace",
-                click: () => sendMenuAction("clear-album-selection"),
+                click: () => sendMenuAction("clear-collection-selection"),
             },
         ],
     });
@@ -518,13 +518,13 @@ const scanFolderTree = async (rootPath: string, existingFiles: Set<string>) => {
     return { folders, files };
 };
 
-const buildImagePayload = async (filePath: string, albumRoot: string): Promise<IndexedImagePayload> => {
+const buildImagePayload = async (filePath: string, collectionRoot: string): Promise<IndexedImagePayload> => {
     const stats = await fs.stat(filePath);
     const fileName = path.basename(filePath);
     const payload: IndexedImagePayload = {
         filePath,
         fileName,
-        albumRoot,
+    collectionRoot,
         sizeBytes: stats.size,
         createdAt: stats.birthtime.toISOString(),
         metadataText: null,
@@ -571,7 +571,7 @@ ipcMain.handle(
         const returnPayload = options.returnPayload ?? true;
 
         return await new Promise<Array<{ rootPath: string; images: IndexedImagePayload[] }>>((resolve) => {
-            const albums: Array<{ rootPath: string; images: IndexedImagePayload[] }> = [];
+            const collections: Array<{ rootPath: string; images: IndexedImagePayload[] }> = [];
             const cleanup = () => {
                 worker.removeAllListeners();
                 worker.terminate();
@@ -600,24 +600,24 @@ ipcMain.handle(
                     });
                     return;
                 }
-                if (message.type === "album") {
-                    _event.sender.send("comfy:indexing-album", {
+                if (message.type === "collection") {
+                    _event.sender.send("comfy:indexing-collection", {
                         rootPath: message.rootPath,
                         images: message.images,
                     });
-                    albums.push({ rootPath: message.rootPath, images: message.images });
+                    collections.push({ rootPath: message.rootPath, images: message.images });
                     return;
                 }
                 if (message.type === "cancelled") {
                     sendComplete();
                     cleanup();
-                    resolve(message.albums ?? albums);
+                    resolve(message.collections ?? collections);
                     return;
                 }
                 if (message.type === "done") {
                     sendComplete();
                     cleanup();
-                    resolve(message.albums ?? albums);
+                    resolve(message.collections ?? collections);
                     return;
                 }
                 if (message.type === "error") {
@@ -906,13 +906,13 @@ ipcMain.on(
         _event,
         state: {
             hasActiveImage: boolean;
-            hasActiveAlbum: boolean;
+            hasActiveCollection: boolean;
             hasSelectedImages: boolean;
-            hasSelectedAlbums: boolean;
+            hasSelectedCollections: boolean;
             hasSingleSelectedImage: boolean;
-            hasSingleSelectedAlbum: boolean;
+            hasSingleSelectedCollection: boolean;
             hasImages: boolean;
-            hasAlbums: boolean;
+            hasCollections: boolean;
             isIndexing: boolean;
             isRemoving: boolean;
             isDeleting: boolean;
@@ -926,24 +926,16 @@ ipcMain.on(
         updateMenuItemEnabled("menu-add-folder", !state.isIndexing);
         updateMenuItemEnabled("menu-reveal-active-image", state.hasActiveImage);
         updateMenuItemEnabled("menu-edit-active-image", state.hasActiveImage);
-        updateMenuItemEnabled("menu-reveal-active-album", state.hasActiveAlbum);
-        updateMenuItemEnabled("menu-rename-selected-image", state.hasSingleSelectedImage);
-        updateMenuItemEnabled("menu-rename-selected-album", state.hasSingleSelectedAlbum);
-        updateMenuItemEnabled("menu-add-selected-images-favorites", state.hasSelectedImages);
-        updateMenuItemEnabled("menu-remove-selected-images-favorites", state.hasSelectedImages);
-        updateMenuItemEnabled("menu-add-selected-albums-favorites", state.hasSelectedAlbums);
-        updateMenuItemEnabled("menu-remove-selected-albums-favorites", state.hasSelectedAlbums);
-        updateMenuItemEnabled("menu-remove-selected-images", state.hasSelectedImages && !removalLocked);
-        updateMenuItemEnabled("menu-delete-selected-images-disk", state.hasSelectedImages && !removalLocked);
-        updateMenuItemEnabled("menu-remove-selected-albums", state.hasSelectedAlbums && !removalLocked);
-        updateMenuItemEnabled("menu-delete-selected-albums-disk", state.hasSelectedAlbums && !removalLocked);
-        updateMenuItemEnabled("menu-rescan-selected-albums", state.hasSelectedAlbums);
-        updateMenuItemEnabled("menu-select-all-images", state.hasImages);
-        updateMenuItemEnabled("menu-invert-image-selection", state.hasImages);
-        updateMenuItemEnabled("menu-clear-image-selection", state.hasSelectedImages);
-        updateMenuItemEnabled("menu-select-all-albums", state.hasAlbums);
-        updateMenuItemEnabled("menu-invert-album-selection", state.hasAlbums);
-        updateMenuItemEnabled("menu-clear-album-selection", state.hasSelectedAlbums);
+        updateMenuItemEnabled("menu-reveal-active-collection", state.hasActiveCollection);
+        updateMenuItemEnabled("menu-rename-selected-collection", state.hasSingleSelectedCollection);
+        updateMenuItemEnabled("menu-add-selected-collections-favorites", state.hasSelectedCollections);
+        updateMenuItemEnabled("menu-remove-selected-collections-favorites", state.hasSelectedCollections);
+        updateMenuItemEnabled("menu-remove-selected-collections", state.hasSelectedCollections && !removalLocked);
+        updateMenuItemEnabled("menu-delete-selected-collections-disk", state.hasSelectedCollections && !removalLocked);
+        updateMenuItemEnabled("menu-rescan-selected-collections", state.hasSelectedCollections);
+        updateMenuItemEnabled("menu-select-all-collections", state.hasCollections);
+        updateMenuItemEnabled("menu-invert-collection-selection", state.hasCollections);
+        updateMenuItemEnabled("menu-clear-collection-selection", state.hasSelectedCollections);
     }
 );
 
@@ -1019,7 +1011,7 @@ ipcMain.handle(
         event: IpcMainInvokeEvent,
         payload:
             | { type: "image"; imageId: string; label: string; selectedCount: number; isSelected: boolean }
-            | { type: "album"; albumId: string; label: string; selectedCount: number; isSelected: boolean }
+            | { type: "collection"; collectionId: string; label: string; selectedCount: number; isSelected: boolean }
     ) => {
         const window = BrowserWindow.fromWebContents(event.sender);
         if (!window) return null;
@@ -1088,56 +1080,56 @@ ipcMain.handle(
                 });
             }
 
-            if (payload.type === "album") {
+            if (payload.type === "collection") {
                 items.push({
                     label: "Reveal in File Manager",
-                    click: () => finish("reveal-album"),
+                    click: () => finish("reveal-collection"),
                 });
                 items.push({
-                    label: "Rescan Album",
-                    click: () => finish("rescan-album"),
+                    label: "Rescan Collection",
+                    click: () => finish("rescan-collection"),
                 });
                 if (payload.selectedCount <= 1) {
                     items.push({
-                        label: "Rename Album…",
-                        click: () => finish("rename-album"),
+                        label: "Rename Collection…",
+                        click: () => finish("rename-collection"),
                     });
                 }
                 if (payload.selectedCount >= 1) {
                     const countLabel = payload.selectedCount > 1 ? ` (${payload.selectedCount})` : "";
                     items.push({
-                        label: `Add Selected Albums${countLabel} to Favourites`,
-                        click: () => finish("add-selected-albums-favorites"),
+                        label: `Add Selected Collections${countLabel} to Favourites`,
+                        click: () => finish("add-selected-collections-favorites"),
                     });
                     items.push({
-                        label: `Remove Selected Albums${countLabel} from Favourites`,
-                        click: () => finish("remove-selected-albums-favorites"),
+                        label: `Remove Selected Collections${countLabel} from Favourites`,
+                        click: () => finish("remove-selected-collections-favorites"),
                     });
                 }
                 if (payload.selectedCount >= 1) {
                     items.push({
-                        label: `Remove Selected Albums from Index${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""}…`,
-                        click: () => finish("remove-selected-albums"),
+                        label: `Remove Selected Collections from Index${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""}…`,
+                        click: () => finish("remove-selected-collections"),
                         enabled: !removalLocked,
                     });
                     items.push({
-                        label: `Delete Selected Albums${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""} from Disk…`,
-                        click: () => finish("delete-selected-albums-disk"),
+                        label: `Delete Selected Collections${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""} from Disk…`,
+                        click: () => finish("delete-selected-collections-disk"),
                         enabled: !removalLocked,
                     });
                 }
                 items.push({ type: "separator" });
                 items.push({
-                    label: "Select All Albums",
-                    click: () => finish("select-all-albums"),
+                    label: "Select All Collections",
+                    click: () => finish("select-all-collections"),
                 });
                 items.push({
-                    label: "Invert Album Selection",
-                    click: () => finish("invert-album-selection"),
+                    label: "Invert Collection Selection",
+                    click: () => finish("invert-collection-selection"),
                 });
                 items.push({
-                    label: "Clear Album Selection",
-                    click: () => finish("clear-album-selection"),
+                    label: "Clear Collection Selection",
+                    click: () => finish("clear-collection-selection"),
                 });
             }
 

@@ -1,17 +1,17 @@
 import { openDB, type IDBPDatabase } from "idb";
-import type { Album, IndexedImage, IndexedImagePayload } from "./types";
+import type { Collection, IndexedImage, IndexedImagePayload } from "./types";
 
 const DB_NAME = "comfy-browser-db";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 const dbPromise = openDB(DB_NAME, DB_VERSION, {
-  upgrade(db: IDBPDatabase, _oldVersion, _newVersion, transaction) {
-    if (!db.objectStoreNames.contains("albums")) {
-      db.createObjectStore("albums", { keyPath: "id" });
+  async upgrade(db: IDBPDatabase, oldVersion, _newVersion, transaction) {
+    if (!db.objectStoreNames.contains("collections")) {
+      db.createObjectStore("collections", { keyPath: "id" });
     }
     if (!db.objectStoreNames.contains("images")) {
       const store = db.createObjectStore("images", { keyPath: "id" });
-      store.createIndex("albumId", "albumId");
+      store.createIndex("collectionId", "collectionId");
     }
     if (!db.objectStoreNames.contains("imagePrefs")) {
       db.createObjectStore("imagePrefs", { keyPath: "imageId" });
@@ -23,27 +23,33 @@ const dbPromise = openDB(DB_NAME, DB_VERSION, {
       db.createObjectStore("appPrefs", { keyPath: "key" });
     }
     if (transaction) {
+      if (db.objectStoreNames.contains("images")) {
+        const imageStore = transaction.objectStore("images");
+        if (!Array.from(imageStore.indexNames).includes("collectionId")) {
+          imageStore.createIndex("collectionId", "collectionId");
+        }
+      }
       transaction.oncomplete = () => {};
     }
   },
 });
 
-const createAlbumName = (rootPath: string) => {
+const createCollectionName = (rootPath: string) => {
   const segments = rootPath.split(/[/\\]/).filter(Boolean);
   return segments[segments.length - 1] ?? rootPath;
 };
 
-export const addAlbumWithImages = async (rootPath: string, payloads: IndexedImagePayload[]) => {
-  const album: Album = {
+export const addCollectionWithImages = async (rootPath: string, payloads: IndexedImagePayload[]) => {
+  const collection: Collection = {
     id: crypto.randomUUID(),
-    name: createAlbumName(rootPath),
+    name: createCollectionName(rootPath),
     rootPath,
     addedAt: new Date().toISOString(),
   };
 
   const images: IndexedImage[] = payloads.map((payload) => ({
     id: crypto.randomUUID(),
-    albumId: album.id,
+    collectionId: collection.id,
     filePath: payload.filePath,
     fileName: payload.fileName,
     fileUrl: payload.filePath,
@@ -55,21 +61,21 @@ export const addAlbumWithImages = async (rootPath: string, payloads: IndexedImag
   }));
 
   const db = await dbPromise;
-  const tx = db.transaction(["albums", "images"], "readwrite");
-  await tx.objectStore("albums").add(album);
+  const tx = db.transaction(["collections", "images"], "readwrite");
+  await tx.objectStore("collections").add(collection);
   const imageStore = tx.objectStore("images");
   for (const image of images) {
     await imageStore.put(image);
   }
   await tx.done;
 
-  return { album, images };
+  return { collection, images };
 };
 
-export const addImagesToAlbum = async (albumId: string, payloads: IndexedImagePayload[]) => {
+export const addImagesToCollection = async (collectionId: string, payloads: IndexedImagePayload[]) => {
   const images: IndexedImage[] = payloads.map((payload) => ({
     id: crypto.randomUUID(),
-    albumId,
+    collectionId,
     filePath: payload.filePath,
     fileName: payload.fileName,
     fileUrl: payload.filePath,
@@ -93,9 +99,9 @@ export const addImagesToAlbum = async (albumId: string, payloads: IndexedImagePa
   return images;
 };
 
-export const getAlbums = async () => {
+export const getCollections = async () => {
   const db = await dbPromise;
-  return db.getAll("albums");
+  return db.getAll("collections");
 };
 
 export const getImages = async () => {
@@ -114,24 +120,24 @@ export const removeImagesById = async (ids: string[]) => {
   await tx.done;
 };
 
-export const removeAlbumById = async (albumId: string) => {
+export const removeCollectionById = async (collectionId: string) => {
   const db = await dbPromise;
-  const tx = db.transaction(["albums", "images", "imagePrefs", "favorites"], "readwrite");
-  const imageIndex = tx.objectStore("images").index("albumId");
-  const imageKeys = await imageIndex.getAllKeys(albumId);
+  const tx = db.transaction(["collections", "images", "imagePrefs", "favorites"], "readwrite");
+  const imageIndex = tx.objectStore("images").index("collectionId");
+  const imageKeys = await imageIndex.getAllKeys(collectionId);
   for (const key of imageKeys) {
     tx.objectStore("images").delete(key);
     tx.objectStore("imagePrefs").delete(String(key));
     tx.objectStore("favorites").delete(String(key));
   }
-  tx.objectStore("albums").delete(albumId);
+  tx.objectStore("collections").delete(collectionId);
   await tx.done;
 };
 
-export const removeAlbumRecord = async (albumId: string) => {
+export const removeCollectionRecord = async (collectionId: string) => {
   const db = await dbPromise;
-  const tx = db.transaction(["albums"], "readwrite");
-  await tx.objectStore("albums").delete(albumId);
+  const tx = db.transaction(["collections"], "readwrite");
+  await tx.objectStore("collections").delete(collectionId);
   await tx.done;
 };
 
@@ -161,12 +167,12 @@ export const removeFavorites = async (ids: string[]) => {
   await tx.done;
 };
 
-export const updateAlbumInfo = async (albumId: string, updates: Partial<Album>) => {
+export const updateCollectionInfo = async (collectionId: string, updates: Partial<Collection>) => {
   const db = await dbPromise;
-  const album = await db.get("albums", albumId);
-  if (!album) return null;
-  const updated = { ...album, ...updates } as Album;
-  await db.put("albums", updated);
+  const collection = await db.get("collections", collectionId);
+  if (!collection) return null;
+  const updated = { ...collection, ...updates } as Collection;
+  await db.put("collections", updated);
   return updated;
 };
 

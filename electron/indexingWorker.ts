@@ -6,7 +6,7 @@ import { parsePngMetadata, readPngDimensions } from "../src/lib/pngMetadata";
 type IndexedImagePayload = {
   filePath: string;
   fileName: string;
-  albumRoot: string;
+  collectionRoot: string;
   sizeBytes: number;
   createdAt: string;
   width?: number;
@@ -40,20 +40,23 @@ type ImageProgressMessage = {
   fileName: string;
 };
 
-type AlbumMessage = {
-  type: "album";
+type CollectionMessage = {
+  type: "collection";
   rootPath: string;
   images: IndexedImagePayload[];
 };
 
 type DoneMessage = {
   type: "done";
-  albums: Array<{ rootPath: string; images: IndexedImagePayload[] }>;
+  collections: Array<{ rootPath: string; images: IndexedImagePayload[] }>;
 };
 
 type ErrorMessage = { type: "error"; message: string };
 
-type CancelledMessage = { type: "cancelled"; albums: Array<{ rootPath: string; images: IndexedImagePayload[] }> };
+type CancelledMessage = {
+  type: "cancelled";
+  collections: Array<{ rootPath: string; images: IndexedImagePayload[] }>;
+};
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".dib"]);
 const THUMBNAIL_DIR = ".thumbs";
@@ -61,7 +64,13 @@ const THUMBNAIL_DIR = ".thumbs";
 let cancelled = false;
 
 const postMessage = (
-  message: FolderProgressMessage | ImageProgressMessage | AlbumMessage | DoneMessage | ErrorMessage | CancelledMessage
+  message:
+    | FolderProgressMessage
+    | ImageProgressMessage
+    | CollectionMessage
+    | DoneMessage
+    | ErrorMessage
+    | CancelledMessage
 ) => {
   parentPort?.postMessage(message);
 };
@@ -97,13 +106,13 @@ const scanFolderTree = async (rootPath: string, existingFiles: Set<string>) => {
   return { cancelled: false, folders, files } as const;
 };
 
-const buildImagePayload = async (filePath: string, albumRoot: string): Promise<IndexedImagePayload> => {
+const buildImagePayload = async (filePath: string, collectionRoot: string): Promise<IndexedImagePayload> => {
   const stats = await fs.stat(filePath);
   const fileName = path.basename(filePath);
   const payload: IndexedImagePayload = {
     filePath,
     fileName,
-    albumRoot,
+    collectionRoot,
     sizeBytes: stats.size,
     createdAt: stats.birthtime.toISOString(),
     metadataText: null,
@@ -125,12 +134,12 @@ const buildImagePayload = async (filePath: string, albumRoot: string): Promise<I
 
 const runIndexing = async (rootPaths: string[], existingPaths: string[], returnPayload: boolean) => {
   const existingFiles = new Set(existingPaths);
-  const albums: Array<{ rootPath: string; images: IndexedImagePayload[] }> = [];
+  const collections: Array<{ rootPath: string; images: IndexedImagePayload[] }> = [];
   const scans = await Promise.all(rootPaths.map((rootPath) => scanFolderTree(rootPath, existingFiles)));
-  const albumFolders: Array<{ rootPath: string; folderPath: string; files: string[] }> = [];
+  const collectionFolders: Array<{ rootPath: string; folderPath: string; files: string[] }> = [];
 
   for (let i = 0; i < rootPaths.length; i += 1) {
-    if (cancelled) return { cancelled: true, albums } as const;
+    if (cancelled) return { cancelled: true, collections } as const;
     const rootPath = rootPaths[i];
     const files = scans[i].files;
     const folderMap = new Map<string, string[]>();
@@ -147,27 +156,27 @@ const runIndexing = async (rootPaths: string[], existingPaths: string[], returnP
 
     for (const [folderPath, folderFiles] of folderMap.entries()) {
       if (!folderFiles.length) continue;
-      albumFolders.push({ rootPath: folderPath, folderPath, files: folderFiles });
+      collectionFolders.push({ rootPath: folderPath, folderPath, files: folderFiles });
     }
   }
 
-  const totalImages = albumFolders.reduce((sum, album) => sum + album.files.length, 0);
+  const totalImages = collectionFolders.reduce((sum, collection) => sum + collection.files.length, 0);
   let folderIndex = 0;
   let imageIndex = 0;
 
-  for (const albumFolder of albumFolders) {
-    if (cancelled) return { cancelled: true, albums } as const;
+  for (const collectionFolder of collectionFolders) {
+    if (cancelled) return { cancelled: true, collections } as const;
     folderIndex += 1;
     postMessage({
       type: "progress-folder",
       current: folderIndex,
-      total: albumFolders.length,
-      folder: albumFolder.folderPath,
+      total: collectionFolders.length,
+      folder: collectionFolder.folderPath,
     });
 
     const images: IndexedImagePayload[] = [];
-    for (const filePath of albumFolder.files) {
-      if (cancelled) return { cancelled: true, albums } as const;
+    for (const filePath of collectionFolder.files) {
+      if (cancelled) return { cancelled: true, collections } as const;
       imageIndex += 1;
       postMessage({
         type: "progress-image",
@@ -175,16 +184,16 @@ const runIndexing = async (rootPaths: string[], existingPaths: string[], returnP
         total: totalImages,
         fileName: path.basename(filePath),
       });
-      images.push(await buildImagePayload(filePath, albumFolder.rootPath));
+      images.push(await buildImagePayload(filePath, collectionFolder.rootPath));
     }
 
-    postMessage({ type: "album", rootPath: albumFolder.rootPath, images });
+    postMessage({ type: "collection", rootPath: collectionFolder.rootPath, images });
     if (returnPayload) {
-      albums.push({ rootPath: albumFolder.rootPath, images });
+      collections.push({ rootPath: collectionFolder.rootPath, images });
     }
   }
 
-  return { cancelled: false, albums } as const;
+  return { cancelled: false, collections } as const;
 };
 
 if (!parentPort) {
@@ -199,12 +208,12 @@ parentPort.on("message", async (message: IncomingMessage) => {
   if (message.type !== "start") return;
   cancelled = false;
   try {
-  const result = await runIndexing(message.rootPaths, message.existingPaths, message.returnPayload ?? true);
+    const result = await runIndexing(message.rootPaths, message.existingPaths, message.returnPayload ?? true);
     if (result.cancelled) {
-      postMessage({ type: "cancelled", albums: result.albums });
+      postMessage({ type: "cancelled", collections: result.collections });
       return;
     }
-    postMessage({ type: "done", albums: result.albums });
+    postMessage({ type: "done", collections: result.collections });
   } catch (error) {
     const messageText = error instanceof Error ? error.message : "Unknown indexing error";
     postMessage({ type: "error", message: messageText });

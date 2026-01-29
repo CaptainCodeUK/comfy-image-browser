@@ -19,28 +19,28 @@ declare global {
       showContextMenu: (
         payload:
           | { type: "image"; imageId: string; label: string; selectedCount: number; isSelected: boolean }
-          | { type: "album"; albumId: string; label: string; selectedCount: number; isSelected: boolean }
+          | { type: "collection"; collectionId: string; label: string; selectedCount: number; isSelected: boolean }
       ) => Promise<
         | "remove-selected-images"
-        | "remove-selected-albums"
+        | "remove-selected-collections"
         | "delete-selected-images-disk"
-        | "delete-selected-albums-disk"
-  | "add-selected-images-favorites"
-  | "remove-selected-images-favorites"
-  | "add-selected-albums-favorites"
-  | "remove-selected-albums-favorites"
+        | "delete-selected-collections-disk"
+        | "add-selected-images-favorites"
+        | "remove-selected-images-favorites"
+        | "add-selected-collections-favorites"
+        | "remove-selected-collections-favorites"
         | "reveal-image"
-  | "edit-image"
+        | "edit-image"
         | "rename-image"
-        | "reveal-album"
-        | "rescan-album"
-        | "rename-album"
+        | "reveal-collection"
+        | "rescan-collection"
+        | "rename-collection"
         | "select-all-images"
         | "invert-image-selection"
         | "clear-image-selection"
-        | "select-all-albums"
-        | "invert-album-selection"
-        | "clear-album-selection"
+        | "select-all-collections"
+        | "invert-collection-selection"
+        | "clear-collection-selection"
         | null
       >;
       deleteFilesFromDisk: (payload: {
@@ -60,13 +60,13 @@ declare global {
   toggleDevTools: () => Promise<boolean>;
       updateMenuState: (state: {
         hasActiveImage: boolean;
-        hasActiveAlbum: boolean;
+        hasActiveCollection: boolean;
         hasSelectedImages: boolean;
-        hasSelectedAlbums: boolean;
+        hasSelectedCollections: boolean;
         hasSingleSelectedImage: boolean;
-        hasSingleSelectedAlbum: boolean;
+        hasSingleSelectedCollection: boolean;
         hasImages: boolean;
-        hasAlbums: boolean;
+        hasCollections: boolean;
         isIndexing: boolean;
         isRemoving: boolean;
         isDeleting: boolean;
@@ -76,25 +76,25 @@ declare global {
           action:
             | "add-folder"
             | "remove-selected-images"
-            | "remove-selected-albums"
+            | "remove-selected-collections"
             | "delete-selected-images-disk"
-            | "delete-selected-albums-disk"
+            | "delete-selected-collections-disk"
             | "reveal-active-image"
-            | "reveal-active-album"
+            | "reveal-active-collection"
             | "edit-active-image"
             | "rename-selected-image"
             | "add-selected-images-favorites"
             | "remove-selected-images-favorites"
-            | "rename-selected-album"
-            | "add-selected-albums-favorites"
-            | "remove-selected-albums-favorites"
-            | "rescan-selected-albums"
+            | "rename-selected-collection"
+            | "add-selected-collections-favorites"
+            | "remove-selected-collections-favorites"
+            | "rescan-selected-collections"
             | "select-all-images"
             | "invert-image-selection"
             | "clear-image-selection"
-            | "select-all-albums"
-            | "invert-album-selection"
-            | "clear-album-selection"
+            | "select-all-collections"
+            | "invert-collection-selection"
+            | "clear-collection-selection"
             | "tab-next"
             | "tab-prev"
             | "tab-duplicate"
@@ -106,7 +106,7 @@ declare global {
       ) => () => void;
       onIndexingFolder: (callback: (payload: { current: number; total: number; folder: string }) => void) => () => void;
       onIndexingImage: (callback: (payload: { current: number; total: number; fileName: string }) => void) => () => void;
-      onIndexingAlbum: (callback: (payload: { rootPath: string; images: IndexedImagePayload[] }) => void) => () => void;
+  onIndexingCollection: (callback: (payload: { rootPath: string; images: IndexedImagePayload[] }) => void) => () => void;
       onIndexingComplete: (callback: () => void) => () => void;
     };
   }

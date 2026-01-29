@@ -1,20 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  addAlbumWithImages,
-  addImagesToAlbum,
+  addCollectionWithImages,
+  addImagesToCollection,
   addFavorites,
-  getAlbums,
+  getCollections,
   getAppPref,
   getFavorites,
   getImages,
   removeFavorites,
-  removeAlbumRecord,
+  removeCollectionRecord,
   removeImagesById,
   setAppPref,
-  updateAlbumInfo,
+  updateCollectionInfo,
   updateImageFileInfo,
 } from "./lib/db";
-import type { Album, IndexedImage, IndexedImagePayload } from "./lib/types";
+import type { Collection, IndexedImage, IndexedImagePayload } from "./lib/types";
 
 const DEFAULT_ICON_SIZE = 180;
 const GRID_GAP = 16;
@@ -24,6 +24,7 @@ const THUMBNAIL_RETRY_MS = 1200;
 const FILE_URL_BATCH_SIZE = 30;
 const REMOVAL_BATCH_SIZE = 50;
 const FAVORITES_ID = "favorites";
+const THUMBNAIL_CACHE_LIMIT = 2000;
 
 const toComfyUrl = (filePath: string) => `comfy://local?path=${encodeURIComponent(filePath)}`;
 
@@ -32,10 +33,10 @@ type Tab =
   | { id: string; title: string; type: "image"; image: IndexedImage };
 
 type ZoomMode = "fit" | "actual" | "width" | "height" | "manual";
-type AlbumSort = "name-asc" | "name-desc" | "added-desc" | "added-asc";
+type CollectionSort = "name-asc" | "name-desc" | "added-desc" | "added-asc";
 type ImageSort = "name-asc" | "name-desc" | "date-desc" | "date-asc" | "size-desc" | "size-asc";
 type ProgressState = { current: number; total: number; label: string } | null;
-type RenameState = { type: "image" | "album"; id: string; value: string } | null;
+type RenameState = { type: "image" | "collection"; id: string; value: string } | null;
 type RemovalItem = { id: string; label: string };
 type RemovalRequest = {
   requestId: string;
@@ -235,14 +236,14 @@ const formatBytes = (value: number) => {
 };
 
 export default function App() {
-  const [albums, setAlbums] = useState<Album[]>([]);
+  const [collections, setCollections] = useState<Collection[]>([]);
   const [images, setImages] = useState<IndexedImage[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([LibraryTab]);
   const [activeTab, setActiveTab] = useState<Tab>(LibraryTab);
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [iconSize, setIconSize] = useState(DEFAULT_ICON_SIZE);
-  const [activeAlbum, setActiveAlbum] = useState<string | "all">("all");
+  const [activeCollection, setActiveCollection] = useState<string | "all">("all");
   const [isIndexing, setIsIndexing] = useState(false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [zoomByTab, setZoomByTab] = useState<Record<string, { mode: ZoomMode; level: number }>>({});
@@ -256,22 +257,22 @@ export default function App() {
   const [lastCopied, setLastCopied] = useState<string | null>(null);
   const [toastVisibleMessage, setToastVisibleMessage] = useState<string | null>(null);
   const [toastLeaving, setToastLeaving] = useState(false);
-  const [albumSort, setAlbumSort] = useState<AlbumSort>("name-asc");
+  const [collectionSort, setCollectionSort] = useState<CollectionSort>("name-asc");
   const [imageSort, setImageSort] = useState<ImageSort>("date-desc");
-  const [selectedAlbumIds, setSelectedAlbumIds] = useState<Set<string>>(new Set());
+  const [selectedCollectionIds, setSelectedCollectionIds] = useState<Set<string>>(new Set());
   const [folderProgress, setFolderProgress] = useState<ProgressState>(null);
   const [imageProgress, setImageProgress] = useState<ProgressState>(null);
-  const [removalAlbumProgress, setRemovalAlbumProgress] = useState<ProgressState>(null);
+  const [removalCollectionProgress, setRemovalCollectionProgress] = useState<ProgressState>(null);
   const [removalImageProgress, setRemovalImageProgress] = useState<ProgressState>(null);
   const [removalCanceling, setRemovalCanceling] = useState(false);
   const [isDeletingFiles, setIsDeletingFiles] = useState(false);
   const indexingTokenRef = useRef<{ cancelled: boolean }>({ cancelled: false });
   const liveIndexRef = useRef<
-    { active: boolean; basePaths: Set<string>; addedPaths: Set<string>; addedAlbumRoots: Set<string> } | null
+    { active: boolean; basePaths: Set<string>; addedPaths: Set<string>; addedCollectionRoots: Set<string> } | null
   >(null);
-  const liveIndexQueueRef = useRef<{ albums: Album[]; images: IndexedImage[]; timer: number | null }>(
+  const liveIndexQueueRef = useRef<{ collections: Collection[]; images: IndexedImage[]; timer: number | null }>(
     {
-      albums: [],
+      collections: [],
       images: [],
       timer: null,
     }
@@ -295,6 +296,8 @@ export default function App() {
   const renameTargetRef = useRef<string | null>(null);
   const thumbnailMapRef = useRef<Record<string, string>>({});
   const thumbnailPendingRef = useRef<Set<string>>(new Set());
+  const thumbnailOrderRef = useRef<string[]>([]);
+  const loadedThumbOrderRef = useRef<string[]>([]);
   const thumbnailRetryRef = useRef<number | null>(null);
   const thumbnailTokenRef = useRef(0);
   const [thumbnailRetryTick, setThumbnailRetryTick] = useState(0);
@@ -323,7 +326,7 @@ export default function App() {
     (
       payload:
         | { type: "remove-images"; items: RemovalItem[]; batchSize: number }
-        | { type: "remove-album"; albumId: string; items: RemovalItem[]; batchSize: number },
+        | { type: "remove-collection"; collectionId: string; items: RemovalItem[]; batchSize: number },
       onProgress?: (progress: { current: number; total: number; label: string }) => void
     ) => {
       const requestId =
@@ -346,7 +349,7 @@ export default function App() {
     async (
       payload:
         | { type: "remove-images"; items: RemovalItem[]; batchSize: number }
-        | { type: "remove-album"; albumId: string; items: RemovalItem[]; batchSize: number },
+        | { type: "remove-collection"; collectionId: string; items: RemovalItem[]; batchSize: number },
       onProgress: (progress: { current: number; total: number; label: string }) => void,
       fallback: () => Promise<void>
     ) => {
@@ -361,7 +364,7 @@ export default function App() {
         const message = error instanceof Error ? error.message : "Removal failed";
         if (message.toLowerCase().includes("cancel")) {
           console.warn("[comfy-browser] removal canceled");
-          setRemovalAlbumProgress(null);
+          setRemovalCollectionProgress(null);
           setRemovalImageProgress(null);
           return;
         }
@@ -511,6 +514,70 @@ export default function App() {
     thumbnailMapRef.current = thumbnailMap;
   }, [thumbnailMap]);
 
+  const pruneThumbnailCache = useCallback(
+    (prev: Record<string, string>, additions: Record<string, string>) => {
+      const next = { ...prev, ...additions };
+      let order = thumbnailOrderRef.current.filter((id) => id in next);
+      const addedIds = Object.keys(additions);
+      if (addedIds.length > 0) {
+        order = order.filter((id) => !addedIds.includes(id));
+        order.push(...addedIds);
+      }
+      const removedIds: string[] = [];
+      while (order.length > THUMBNAIL_CACHE_LIMIT) {
+        const removed = order.shift();
+        if (removed && removed in next) {
+          delete next[removed];
+          removedIds.push(removed);
+        }
+      }
+      thumbnailOrderRef.current = order.filter((id) => id in next);
+      return { next, removedIds };
+    },
+    []
+  );
+
+  const removeLoadedThumbs = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    setLoadedThumbs((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      loadedThumbOrderRef.current = loadedThumbOrderRef.current.filter((id) => !ids.includes(id));
+      return next;
+    });
+  }, []);
+
+  const removeThumbnailEntries = useCallback(
+    (ids: string[]) => {
+      if (ids.length === 0) return;
+      setThumbnailMap((prev) => {
+        const next = { ...prev };
+        ids.forEach((id) => delete next[id]);
+        thumbnailOrderRef.current = thumbnailOrderRef.current.filter((id) => !ids.includes(id));
+        return next;
+      });
+      removeLoadedThumbs(ids);
+    },
+    [removeLoadedThumbs]
+  );
+
+  const markThumbLoaded = useCallback((id: string) => {
+    setLoadedThumbs((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      let order = loadedThumbOrderRef.current.filter((entry) => entry !== id);
+      order.push(id);
+      while (order.length > THUMBNAIL_CACHE_LIMIT) {
+        const removed = order.shift();
+        if (removed) {
+          next.delete(removed);
+        }
+      }
+      loadedThumbOrderRef.current = order;
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     return () => {
       if (thumbnailRetryRef.current) {
@@ -528,21 +595,21 @@ export default function App() {
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      void setAppPref("activeAlbum", activeAlbum);
+      void setAppPref("activeCollection", activeCollection);
     }, 200);
     return () => window.clearTimeout(timeout);
-  }, [activeAlbum]);
+  }, [activeCollection]);
 
   useEffect(() => {
-    console.log("[comfy-browser] Active album changed", activeAlbum);
-  }, [activeAlbum]);
+    console.log("[comfy-browser] Active collection changed", activeCollection);
+  }, [activeCollection]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      void setAppPref("albumSort", albumSort);
+      void setAppPref("collectionSort", collectionSort);
     }, 200);
     return () => window.clearTimeout(timeout);
-  }, [albumSort]);
+  }, [collectionSort]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -551,30 +618,40 @@ export default function App() {
     return () => window.clearTimeout(timeout);
   }, [imageSort]);
 
-  const albumById = useMemo(() => {
-    return new Map(albums.map((album) => [album.id, album]));
-  }, [albums]);
+  const collectionById = useMemo(() => {
+    return new Map(collections.map((collection) => [collection.id, collection]));
+  }, [collections]);
+
 
   const imageById = useMemo(() => {
     return new Map(images.map((image) => [image.id, image]));
   }, [images]);
 
-  const createdAtMsById = useMemo(() => {
-    return new Map(images.map((image) => [image.id, Date.parse(image.createdAt)]));
-  }, [images]);
-
   const searchIndex = useMemo(() => {
     const map = new Map<string, string>();
     for (const image of images) {
-      const albumName = albumById.get(image.albumId)?.name ?? "";
+      const collectionName = image.collectionId
+        ? collectionById.get(image.collectionId)?.name ?? ""
+        : "Unassigned";
       const metaString = image.metadataText ? JSON.stringify(image.metadataText).toLowerCase() : "";
-      map.set(image.id, `${image.fileName.toLowerCase()}|${albumName.toLowerCase()}|${metaString}`);
+      map.set(image.id, `${image.fileName.toLowerCase()}|${collectionName.toLowerCase()}|${metaString}`);
     }
     return map;
-  }, [images, albumById]);
+  }, [images, collectionById]);
+
+  const gridColumnCount = useMemo(() => {
+    if (!gridMetrics.width) return 1;
+    return Math.max(1, Math.floor((gridMetrics.width + GRID_GAP) / (iconSize + GRID_GAP)));
+  }, [gridMetrics.width, iconSize]);
+
+  const rowHeight = iconSize + CARD_META_HEIGHT + GRID_GAP;
 
   const sortImages = useCallback(
     (items: IndexedImage[]) => {
+      let createdAtMap: Map<string, number> | null = null;
+      if (imageSort === "date-asc" || imageSort === "date-desc") {
+        createdAtMap = new Map(items.map((image) => [image.id, Date.parse(image.createdAt)]));
+      }
       const sorted = [...items];
       sorted.sort((a, b) => {
         switch (imageSort) {
@@ -583,13 +660,13 @@ export default function App() {
           case "name-desc":
             return b.fileName.localeCompare(a.fileName);
           case "date-asc": {
-            const aTime = createdAtMsById.get(a.id) ?? 0;
-            const bTime = createdAtMsById.get(b.id) ?? 0;
+            const aTime = createdAtMap?.get(a.id) ?? 0;
+            const bTime = createdAtMap?.get(b.id) ?? 0;
             return aTime - bTime;
           }
           case "date-desc": {
-            const aTime = createdAtMsById.get(a.id) ?? 0;
-            const bTime = createdAtMsById.get(b.id) ?? 0;
+            const aTime = createdAtMap?.get(a.id) ?? 0;
+            const bTime = createdAtMap?.get(b.id) ?? 0;
             return bTime - aTime;
           }
           case "size-asc":
@@ -602,17 +679,21 @@ export default function App() {
       });
       return sorted;
     },
-    [createdAtMsById, imageSort]
+    [imageSort]
   );
 
-  const filteredImages = useMemo(() => {
+  const filteredImageResult = useMemo(() => {
     const start = performance.now();
     const query = search.trim().toLowerCase();
     const visible = images.filter((image) => {
-      if (activeAlbum === FAVORITES_ID && !favoriteIds.has(image.id)) {
+      if (activeCollection === FAVORITES_ID && !favoriteIds.has(image.id)) {
         return false;
       }
-      if (activeAlbum !== "all" && activeAlbum !== FAVORITES_ID && image.albumId !== activeAlbum) {
+      if (
+        activeCollection !== "all" &&
+        activeCollection !== FAVORITES_ID &&
+        image.collectionId !== activeCollection
+      ) {
         return false;
       }
       if (!query) return true;
@@ -620,6 +701,16 @@ export default function App() {
       return searchText.includes(query);
     });
     const sorted = sortImages(visible);
+    const allImagesMode = activeCollection === "all" && !query;
+    if (allImagesMode && sorted.length > gridColumnCount * 3) {
+      const bufferRows = 6;
+      const startRow = Math.max(0, Math.floor(gridMetrics.scrollTop / rowHeight) - bufferRows);
+      const endRow = Math.ceil((gridMetrics.scrollTop + gridMetrics.height) / rowHeight) + bufferRows;
+      const windowStartIndex = startRow * gridColumnCount;
+      const windowEndIndex = Math.min(sorted.length, (endRow + 1) * gridColumnCount);
+      const windowed = sorted.slice(windowStartIndex, windowEndIndex);
+      return { items: windowed, totalCount: sorted.length, windowStartIndex };
+    }
     const duration = performance.now() - start;
     if (duration > 50) {
       console.log("[comfy-browser] Filter/sort cost", {
@@ -628,58 +719,74 @@ export default function App() {
         visible: sorted.length,
       });
     }
-    return sorted;
-  }, [images, search, activeAlbum, favoriteIds, searchIndex, sortImages]);
+    return { items: sorted, totalCount: sorted.length, windowStartIndex: 0 };
+  }, [
+    images,
+    search,
+    activeCollection,
+    favoriteIds,
+    searchIndex,
+    sortImages,
+    gridColumnCount,
+    gridMetrics.scrollTop,
+    gridMetrics.height,
+    rowHeight,
+  ]);
+
+  const filteredImages = filteredImageResult.items;
+  const filteredImageCount = filteredImageResult.totalCount;
+  const filteredWindowStart = filteredImageResult.windowStartIndex;
 
   const selectedImages = filteredImages.filter((image) => selectedIds.has(image.id));
 
-  const albumIdForNav =
+  const collectionIdForNav =
     activeTab.type === "image"
-      ? activeAlbum === FAVORITES_ID && favoriteIds.has(activeTab.image.id)
+      ? activeCollection === FAVORITES_ID && favoriteIds.has(activeTab.image.id)
         ? FAVORITES_ID
-        : activeTab.image.albumId
-      : activeAlbum;
-  const albumHighlightId = albumIdForNav;
+        : activeTab.image.collectionId
+      : activeCollection;
+  const collectionHighlightId = collectionIdForNav;
 
-  const albumSortedImages = useMemo(() => {
+  const collectionSortedImages = useMemo(() => {
     const trimmedQuery = search.trim();
-    if (!trimmedQuery && albumIdForNav === activeAlbum) {
+    if (!trimmedQuery && collectionIdForNav === activeCollection) {
       return filteredImages;
     }
     const visible = images.filter((image) => {
-      if (albumIdForNav === FAVORITES_ID && !favoriteIds.has(image.id)) {
+      if (collectionIdForNav === FAVORITES_ID && !favoriteIds.has(image.id)) {
         return false;
       }
-      if (albumIdForNav !== "all" && albumIdForNav !== FAVORITES_ID && image.albumId !== albumIdForNav) {
+      if (
+        collectionIdForNav !== "all" &&
+        collectionIdForNav !== FAVORITES_ID &&
+        image.collectionId !== collectionIdForNav
+      ) {
         return false;
       }
       return true;
     });
     return sortImages(visible);
-  }, [images, albumIdForNav, favoriteIds, activeAlbum, filteredImages, search, sortImages]);
+  }, [images, collectionIdForNav, favoriteIds, activeCollection, filteredImages, search, sortImages]);
 
   const navigationImages = useMemo(() => {
     if (activeTab.type === "image" && search.trim()) {
       return filteredImages;
     }
-    return albumSortedImages;
-  }, [activeTab.type, search, filteredImages, albumSortedImages]);
+    return collectionSortedImages;
+  }, [activeTab.type, search, filteredImages, collectionSortedImages]);
 
-  const gridColumnCount = useMemo(() => {
-    if (!gridMetrics.width) return 1;
-    return Math.max(1, Math.floor((gridMetrics.width + GRID_GAP) / (iconSize + GRID_GAP)));
-  }, [gridMetrics.width, iconSize]);
-
-  const rowHeight = iconSize + CARD_META_HEIGHT + GRID_GAP;
-  const totalRows = Math.ceil(filteredImages.length / gridColumnCount);
+  const totalRows = Math.ceil(filteredImageCount / gridColumnCount);
   const startRow = Math.max(0, Math.floor(gridMetrics.scrollTop / rowHeight) - 1);
   const endRow = Math.min(
     totalRows - 1,
     Math.ceil((gridMetrics.scrollTop + gridMetrics.height) / rowHeight) + 1
   );
   const startIndex = startRow * gridColumnCount;
-  const endIndex = Math.min(filteredImages.length, (endRow + 1) * gridColumnCount);
-  const visibleImages = filteredImages.slice(startIndex, endIndex);
+  const endIndex = Math.min(filteredImageCount, (endRow + 1) * gridColumnCount);
+  const visibleImages = filteredImages.slice(
+    Math.max(0, startIndex - filteredWindowStart),
+    Math.max(0, endIndex - filteredWindowStart)
+  );
 
   const getRangeIds = useCallback(
     (start: number, end: number) => {
@@ -722,15 +829,15 @@ export default function App() {
     });
     setFocusedIndex((prev) => {
       if (prev === null) return prev;
-      if (filteredImages.length === 0) return null;
-      return Math.min(prev, filteredImages.length - 1);
+      if (filteredImageCount === 0) return null;
+      return Math.min(prev, filteredImageCount - 1);
     });
-  }, [filteredImages]);
+  }, [filteredImages, filteredImageCount]);
 
-  const sortedAlbums = useMemo(() => {
-    const sorted = [...albums];
+  const sortedCollections = useMemo(() => {
+    const sorted = [...collections];
     sorted.sort((a, b) => {
-      switch (albumSort) {
+      switch (collectionSort) {
         case "name-asc":
           return a.name.localeCompare(b.name);
         case "name-desc":
@@ -744,7 +851,7 @@ export default function App() {
       }
     });
     return sorted;
-  }, [albums, albumSort]);
+  }, [collections, collectionSort]);
 
   const hydrateFileUrls = useCallback(
     (sourceImages: IndexedImage[]) => {
@@ -828,9 +935,9 @@ export default function App() {
       window.clearTimeout(queue.timer);
       queue.timer = null;
     }
-    if (queue.albums.length > 0) {
-      setAlbums((prev) => [...prev, ...queue.albums]);
-      queue.albums = [];
+    if (queue.collections.length > 0) {
+      setCollections((prev) => [...prev, ...queue.collections]);
+      queue.collections = [];
     }
     if (queue.images.length > 0) {
       const baseImages = queue.images.map((image) => ({ ...image, fileUrl: image.filePath }));
@@ -880,45 +987,50 @@ export default function App() {
   useEffect(() => {
     let cleanup: (() => void) | undefined;
     const load = async () => {
-  console.log("[comfy-browser] Loading albums and images...");
+      console.log("[comfy-browser] Loading collections and images...");
       const [
-        albumRows,
+        collectionRows,
         imageRows,
         favoriteRows,
         storedIconSize,
-        storedAlbum,
-        storedAlbumSort,
+        storedCollection,
+        storedCollectionSort,
         storedImageSort,
       ] = await Promise.all([
-        getAlbums(),
+        getCollections(),
         getImages(),
         getFavorites(),
         getAppPref<number>("iconSize"),
-        getAppPref<string>("activeAlbum"),
-        getAppPref<AlbumSort>("albumSort"),
+        getAppPref<string>("activeCollection"),
+        getAppPref<CollectionSort>("collectionSort"),
         getAppPref<ImageSort>("imageSort"),
       ]);
-  const baseImages = imageRows.map((image: IndexedImage) => ({ ...image, fileUrl: image.filePath }));
+      const baseImages = imageRows.map((image: IndexedImage) => ({ ...image, fileUrl: image.filePath }));
+  const fallbackActiveCollection = storedCollection;
+  const fallbackCollectionSort = storedCollectionSort;
       console.log("[comfy-browser] Loaded", {
-        albums: albumRows.length,
+        collections: collectionRows.length,
         images: baseImages.length,
       });
-      setAlbums(albumRows);
+      setCollections(collectionRows);
       setImages(baseImages);
       setFavoriteIds(new Set(favoriteRows));
       cleanup = hydrateFileUrls(baseImages);
       if (storedIconSize) {
         setIconSize(storedIconSize);
       }
-      if (storedAlbum === FAVORITES_ID || storedAlbum === "all") {
-        setActiveAlbum(storedAlbum as string | "all");
-      } else if (storedAlbum && albumRows.some((album: Album) => album.id === storedAlbum)) {
-        setActiveAlbum(storedAlbum as string | "all");
-      } else if (storedAlbum) {
-        setActiveAlbum("all");
+      if (fallbackActiveCollection === FAVORITES_ID || fallbackActiveCollection === "all") {
+        setActiveCollection(fallbackActiveCollection as string | "all");
+      } else if (
+        fallbackActiveCollection &&
+        collectionRows.some((collection: Collection) => collection.id === fallbackActiveCollection)
+      ) {
+        setActiveCollection(fallbackActiveCollection as string | "all");
+      } else if (fallbackActiveCollection) {
+        setActiveCollection("all");
       }
-      if (storedAlbumSort) {
-        setAlbumSort(storedAlbumSort);
+      if (fallbackCollectionSort) {
+        setCollectionSort(fallbackCollectionSort);
       }
       if (storedImageSort) {
         setImageSort(storedImageSort);
@@ -931,7 +1043,7 @@ export default function App() {
   useEffect(() => {
     if (!bridgeAvailable) return;
     thumbnailTokenRef.current += 1;
-  }, [bridgeAvailable, visibleImages]);
+  }, [bridgeAvailable, visibleImages, pruneThumbnailCache, removeLoadedThumbs]);
 
 
   useEffect(() => {
@@ -950,15 +1062,19 @@ export default function App() {
 
       if (cancelled || token !== thumbnailTokenRef.current) return;
 
+      let removedIds: string[] = [];
       setThumbnailMap((prev) => {
-        const next = { ...prev };
+        const additions: Record<string, string> = {};
         for (const result of results) {
           if (result.url) {
-            next[result.id] = result.url;
+            additions[result.id] = result.url;
           }
         }
-        return next;
+        const pruned = pruneThumbnailCache(prev, additions);
+        removedIds = pruned.removedIds;
+        return pruned.next;
       });
+      removeLoadedThumbs(removedIds);
     };
 
     void prefill();
@@ -1059,18 +1175,22 @@ export default function App() {
       if (cancelled || token !== thumbnailTokenRef.current) return;
 
       let shouldRetry = false;
+      let removedIds: string[] = [];
       setThumbnailMap((prev) => {
-        const next = { ...prev };
+        const additions: Record<string, string> = {};
         for (const result of results) {
           thumbnailPendingRef.current.delete(result.id);
           if (result.url) {
-            next[result.id] = result.url;
+            additions[result.id] = result.url;
           } else {
             shouldRetry = true;
           }
         }
-        return next;
+        const pruned = pruneThumbnailCache(prev, additions);
+        removedIds = pruned.removedIds;
+        return pruned.next;
       });
+      removeLoadedThumbs(removedIds);
 
       if (shouldRetry) {
         scheduleRetry();
@@ -1091,7 +1211,7 @@ export default function App() {
       }
       thumbnailPendingRef.current.clear();
     };
-  }, [visibleImages, bridgeAvailable, thumbnailRetryTick]);
+  }, [visibleImages, bridgeAvailable, thumbnailRetryTick, pruneThumbnailCache, removeLoadedThumbs]);
 
   const toggleSelection = (id: string, multi: boolean) => {
     setSelectedIds((prev) => {
@@ -1184,14 +1304,14 @@ export default function App() {
       if (event.key === "F2") {
         event.preventDefault();
         if (event.shiftKey) {
-          const albumTarget =
-            selectedAlbumIds.size === 1
-              ? albums.find((album) => selectedAlbumIds.has(album.id))
-              : activeAlbum !== "all"
-              ? albumById.get(activeAlbum) ?? null
+          const collectionTarget =
+            selectedCollectionIds.size === 1
+              ? collections.find((collection) => selectedCollectionIds.has(collection.id))
+              : activeCollection !== "all"
+              ? collectionById.get(activeCollection) ?? null
               : null;
-          if (albumTarget) {
-            startRenameAlbum(albumTarget);
+          if (collectionTarget) {
+            startRenameCollection(collectionTarget);
           }
         } else {
           const imageTarget =
@@ -1250,7 +1370,7 @@ export default function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
         event.preventDefault();
         if (event.shiftKey) {
-          handleSelectAllAlbums();
+          handleSelectAllCollections();
         } else if (activeTab.type === "library") {
           handleSelectAllImages();
         }
@@ -1259,7 +1379,7 @@ export default function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "i") {
         event.preventDefault();
         if (event.shiftKey) {
-          handleInvertAlbumSelection();
+          handleInvertCollectionSelection();
         } else if (activeTab.type === "library") {
           handleInvertImageSelection();
         }
@@ -1268,7 +1388,7 @@ export default function App() {
       if ((event.ctrlKey || event.metaKey) && event.key === "Backspace") {
         event.preventDefault();
         if (event.shiftKey) {
-          handleClearAlbumSelection();
+          handleClearCollectionSelection();
         } else if (activeTab.type === "library") {
           handleClearImageSelection();
         }
@@ -1377,22 +1497,22 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [
     activeTab,
-  albumSortedImages,
-  navigationImages,
-    albums,
-    albumById,
-    activeAlbum,
+    collectionSortedImages,
+    navigationImages,
+    collections,
+    collectionById,
+    activeCollection,
     filteredImages,
     focusedIndex,
     gridColumnCount,
     handleNavigateImage,
     selectedIds,
-    selectedAlbumIds,
+    selectedCollectionIds,
     selectedImages,
     startRenameImage,
-    startRenameAlbum,
-  toggleFavoriteImage,
-  searchInputRef,
+    startRenameCollection,
+    toggleFavoriteImage,
+    searchInputRef,
     selectionAnchor,
     getRangeIds,
     tabs,
@@ -1536,8 +1656,8 @@ export default function App() {
     setRenameState({ type: "image", id: image.id, value: image.fileName });
   }
 
-  function startRenameAlbum(album: Album) {
-    setRenameState({ type: "album", id: album.id, value: album.name });
+  function startRenameCollection(collection: Collection) {
+    setRenameState({ type: "collection", id: collection.id, value: collection.name });
   }
 
   function cancelRename() {
@@ -1596,16 +1716,7 @@ export default function App() {
           ? { ...currentTab, title: fileName, image: { ...currentTab.image, filePath: newPath, fileName, fileUrl: newPath } }
           : currentTab
       );
-      setThumbnailMap((prev) => {
-        const next = { ...prev };
-        delete next[image.id];
-        return next;
-      });
-      setLoadedThumbs((prev) => {
-        const next = new Set(prev);
-        next.delete(image.id);
-        return next;
-      });
+      removeThumbnailEntries([image.id]);
       hydrateFileUrls([{ ...image, filePath: newPath, fileName, fileUrl: newPath }]);
       setToastMessage(`Renamed image to ${fileName}`);
       setLastCopied(`Renamed image to ${fileName}`);
@@ -1613,28 +1724,32 @@ export default function App() {
       return;
     }
 
-    const album = albums.find((entry) => entry.id === current.id);
-    if (!album || !window.comfy?.renamePath) {
+    const collection = collections.find((entry) => entry.id === current.id);
+    if (!collection || !window.comfy?.renamePath) {
       setRenameState(null);
       return;
     }
-    if (trimmed === album.name) {
+    if (trimmed === collection.name) {
       setRenameState(null);
       return;
     }
-    const parentPath = getParentPath(album.rootPath);
+    const parentPath = getParentPath(collection.rootPath);
     const newRootPath = joinPath(parentPath, trimmed);
-    const result = await window.comfy.renamePath({ oldPath: album.rootPath, newPath: newRootPath, kind: "folder" });
+    const result = await window.comfy.renamePath({
+      oldPath: collection.rootPath,
+      newPath: newRootPath,
+      kind: "folder",
+    });
     if (!result?.success) {
-      setToastMessage(result?.message ?? "Failed to rename album");
-      setLastCopied(result?.message ?? "Failed to rename album");
+  setToastMessage(result?.message ?? "Failed to rename collection");
+  setLastCopied(result?.message ?? "Failed to rename collection");
       return;
     }
-    await updateAlbumInfo(album.id, { name: trimmed, rootPath: newRootPath });
-    const prefix = ensureTrailingSeparator(album.rootPath);
+    await updateCollectionInfo(collection.id, { name: trimmed, rootPath: newRootPath });
+    const prefix = ensureTrailingSeparator(collection.rootPath);
     const nextPrefix = ensureTrailingSeparator(newRootPath);
     const updatedImages = images
-      .filter((entry) => entry.albumId === album.id)
+      .filter((entry) => entry.collectionId === collection.id)
       .map((entry) => {
         const nextPath = entry.filePath.startsWith(prefix)
           ? `${nextPrefix}${entry.filePath.slice(prefix.length)}`
@@ -1645,11 +1760,13 @@ export default function App() {
       updatedImages.map((entry) => updateImageFileInfo(entry.id, entry.filePath, entry.fileName))
     );
     const updatedMap = new Map(updatedImages.map((entry) => [entry.id, entry]));
-    setAlbums((prev) => prev.map((entry) => (entry.id === album.id ? { ...entry, name: trimmed, rootPath: newRootPath } : entry)));
+    setCollections((prev) =>
+      prev.map((entry) => (entry.id === collection.id ? { ...entry, name: trimmed, rootPath: newRootPath } : entry))
+    );
     setImages((prev) => prev.map((entry) => updatedMap.get(entry.id) ?? entry));
     setTabs((prev) =>
       prev.map((tab) =>
-        tab.type === "image" && tab.image.albumId === album.id
+        tab.type === "image" && tab.image.collectionId === collection.id
           ? {
               ...tab,
               image: updatedMap.get(tab.image.id) ?? tab.image,
@@ -1658,25 +1775,14 @@ export default function App() {
       )
     );
     setActiveTab((currentTab) =>
-      currentTab.type === "image" && currentTab.image.albumId === album.id
+      currentTab.type === "image" && currentTab.image.collectionId === collection.id
         ? { ...currentTab, image: updatedMap.get(currentTab.image.id) ?? currentTab.image }
         : currentTab
     );
-    setThumbnailMap((prev) => {
-      const next = { ...prev };
-      updatedImages.forEach((entry) => {
-        delete next[entry.id];
-      });
-      return next;
-    });
-    setLoadedThumbs((prev) => {
-      const next = new Set(prev);
-      updatedImages.forEach((entry) => next.delete(entry.id));
-      return next;
-    });
+    removeThumbnailEntries(updatedImages.map((entry) => entry.id));
     hydrateFileUrls(updatedImages);
-    setToastMessage(`Renamed album to ${trimmed}`);
-    setLastCopied(`Renamed album to ${trimmed}`);
+  setToastMessage(`Renamed collection to ${trimmed}`);
+  setLastCopied(`Renamed collection to ${trimmed}`);
     setRenameState(null);
   }
 
@@ -1718,21 +1824,25 @@ export default function App() {
     }
   }
 
-  async function addAlbumToFavorites(album: Album) {
-    const albumImages = images.filter((image) => image.albumId === album.id).map((image) => image.id);
-    if (albumImages.length === 0) return;
-    await addFavoriteImages(albumImages, `${album.name} added to favourites`);
+  async function addCollectionToFavorites(collection: Collection) {
+    const collectionImages = images
+      .filter((image) => image.collectionId === collection.id)
+      .map((image) => image.id);
+    if (collectionImages.length === 0) return;
+    await addFavoriteImages(collectionImages, `${collection.name} added to favourites`);
   }
 
-  async function removeAlbumFromFavorites(album: Album) {
-    const albumImages = images.filter((image) => image.albumId === album.id).map((image) => image.id);
-    if (albumImages.length === 0) return;
-    await removeFavoriteImages(albumImages, `${album.name} removed from favourites`);
+  async function removeCollectionFromFavorites(collection: Collection) {
+    const collectionImages = images
+      .filter((image) => image.collectionId === collection.id)
+      .map((image) => image.id);
+    if (collectionImages.length === 0) return;
+    await removeFavoriteImages(collectionImages, `${collection.name} removed from favourites`);
   }
 
-  const removeAlbumFromIndex = async (albumId: string) => {
-    console.log("[comfy-browser] removing album from index", albumId);
-    const removedImages = images.filter((image) => image.albumId === albumId);
+  const removeCollectionFromIndex = async (collectionId: string) => {
+    console.log("[comfy-browser] removing collection from index", collectionId);
+    const removedImages = images.filter((image) => image.collectionId === collectionId);
     const removedItems = removedImages.map((image) => ({ id: image.id, label: image.fileName }));
     const removedImageIds = removedItems.map((item) => item.id);
     if (removedItems.length > 0) {
@@ -1740,11 +1850,11 @@ export default function App() {
       await yieldToPaint();
     }
     await runRemovalTask(
-      { type: "remove-album", albumId, items: removedItems, batchSize: REMOVAL_BATCH_SIZE },
+      { type: "remove-collection", collectionId, items: removedItems, batchSize: REMOVAL_BATCH_SIZE },
       (progress) => {
         setRemovalImageProgress(progress);
-        console.log("[comfy-browser] removing album image", {
-          albumId,
+        console.log("[comfy-browser] removing collection image", {
+          collectionId,
           index: progress.current,
           total: progress.total,
           fileName: progress.label,
@@ -1765,13 +1875,16 @@ export default function App() {
         if (batch.length > 0) {
           await removeImagesById(batch);
         }
-        await removeAlbumRecord(albumId);
+        await removeCollectionRecord(collectionId);
       }
     );
-  setRemovalImageProgress(null);
-    console.log("[comfy-browser] removed album images", { albumId, count: removedImageIds.length });
+    setRemovalImageProgress(null);
+    console.log("[comfy-browser] removed collection images", {
+      collectionId,
+      count: removedImageIds.length,
+    });
     const removedIdSet = new Set(removedImageIds);
-    setAlbums((prev) => prev.filter((album) => album.id !== albumId));
+    setCollections((prev) => prev.filter((collection) => collection.id !== collectionId));
     setFavoriteIds((prev) => {
       if (prev.size === 0) return prev;
       const next = new Set(prev);
@@ -1785,61 +1898,62 @@ export default function App() {
       removedImageIds.forEach((id) => next.delete(id));
       return next;
     });
-    if (activeAlbum === albumId) {
-      setActiveAlbum("all");
+    if (activeCollection === collectionId) {
+      setActiveCollection("all");
     }
-    setSelectedAlbumIds((prev) => {
+    setSelectedCollectionIds((prev) => {
       const next = new Set(prev);
-      next.delete(albumId);
+      next.delete(collectionId);
       return next;
     });
   };
 
-  const handleRemoveAlbum = async (albumId: string) => {
-    const albumName = albums.find((album) => album.id === albumId)?.name ?? "this album";
-    const confirmed = window.confirm(`Remove ${albumName} from the index?`);
+  const handleRemoveCollection = async (collectionId: string) => {
+    const collectionName =
+      collections.find((collection) => collection.id === collectionId)?.name ?? "this collection";
+    const confirmed = window.confirm(`Remove ${collectionName} from the index?`);
     if (!confirmed) return;
-    console.log("[comfy-browser] starting album removal", { albumId, albumName });
-    setRemovalAlbumProgress({ current: 0, total: 1, label: albumName });
+    console.log("[comfy-browser] starting collection removal", { collectionId, collectionName });
+    setRemovalCollectionProgress({ current: 0, total: 1, label: collectionName });
     await yieldToPaint();
-    await removeAlbumFromIndex(albumId);
+    await removeCollectionFromIndex(collectionId);
     await yieldToPaint();
-    setRemovalAlbumProgress(null);
-    console.log("[comfy-browser] finished album removal", { albumId, albumName });
+    setRemovalCollectionProgress(null);
+    console.log("[comfy-browser] finished collection removal", { collectionId, collectionName });
   };
 
-  const handleToggleAlbumSelection = (albumId: string) => {
-    setSelectedAlbumIds((prev) => {
+  const handleToggleCollectionSelection = (collectionId: string) => {
+    setSelectedCollectionIds((prev) => {
       const next = new Set(prev);
-      if (next.has(albumId)) {
-        next.delete(albumId);
+      if (next.has(collectionId)) {
+        next.delete(collectionId);
       } else {
-        next.add(albumId);
+        next.add(collectionId);
       }
       return next;
     });
   };
 
-  const handleRemoveSelectedAlbums = async () => {
-    if (selectedAlbumIds.size === 0) return;
-    const confirmed = window.confirm(`Remove ${selectedAlbumIds.size} album(s) from the index?`);
+  const handleRemoveSelectedCollections = async () => {
+    if (selectedCollectionIds.size === 0) return;
+    const confirmed = window.confirm(`Remove ${selectedCollectionIds.size} collection(s) from the index?`);
     if (!confirmed) return;
-    const ids = Array.from(selectedAlbumIds);
+    const ids = Array.from(selectedCollectionIds);
     let index = 0;
-    console.log("[comfy-browser] starting bulk album removal", { count: ids.length });
-    setRemovalAlbumProgress({ current: 0, total: ids.length, label: "" });
+    console.log("[comfy-browser] starting bulk collection removal", { count: ids.length });
+    setRemovalCollectionProgress({ current: 0, total: ids.length, label: "" });
     await yieldToPaint();
     for (const id of ids) {
       index += 1;
-      const name = albums.find((album) => album.id === id)?.name ?? "Album";
-      console.log("[comfy-browser] removing album", { index, total: ids.length, albumId: id, name });
-      setRemovalAlbumProgress({ current: index, total: ids.length, label: name });
+      const name = collections.find((collection) => collection.id === id)?.name ?? "Collection";
+      console.log("[comfy-browser] removing collection", { index, total: ids.length, collectionId: id, name });
+      setRemovalCollectionProgress({ current: index, total: ids.length, label: name });
       await yieldToPaint();
-      await removeAlbumFromIndex(id);
+      await removeCollectionFromIndex(id);
       await yieldToPaint();
     }
-    setRemovalAlbumProgress(null);
-    console.log("[comfy-browser] finished bulk album removal", { count: ids.length });
+    setRemovalCollectionProgress(null);
+    console.log("[comfy-browser] finished bulk collection removal", { count: ids.length });
   };
 
   const handleSelectAllImages = () => {
@@ -1864,26 +1978,26 @@ export default function App() {
     setSelectedIds(new Set());
   };
 
-  const handleSelectAllAlbums = () => {
-    if (albums.length === 0) return;
-    setSelectedAlbumIds(new Set(albums.map((album) => album.id)));
+  const handleSelectAllCollections = () => {
+    if (collections.length === 0) return;
+    setSelectedCollectionIds(new Set(collections.map((collection) => collection.id)));
   };
 
-  const handleInvertAlbumSelection = () => {
-    if (albums.length === 0) return;
-    setSelectedAlbumIds((prev) => {
+  const handleInvertCollectionSelection = () => {
+    if (collections.length === 0) return;
+    setSelectedCollectionIds((prev) => {
       const next = new Set<string>();
-      albums.forEach((album) => {
-        if (!prev.has(album.id)) {
-          next.add(album.id);
+      collections.forEach((collection) => {
+        if (!prev.has(collection.id)) {
+          next.add(collection.id);
         }
       });
       return next;
     });
   };
 
-  const handleClearAlbumSelection = () => {
-    setSelectedAlbumIds(new Set());
+  const handleClearCollectionSelection = () => {
+    setSelectedCollectionIds(new Set());
   };
 
   const handleRevealInFolder = async (filePath: string | undefined) => {
@@ -1922,35 +2036,39 @@ export default function App() {
     }
   };
 
-  const handleDeleteAlbumFromDisk = async (albumId: string) => {
-    const album = albums.find((entry) => entry.id === albumId);
-    if (!album) return;
-    const albumImageIds = images.filter((image) => image.albumId === albumId).map((image) => image.id);
-    if (!albumImageIds.length) return;
-    const deletedIds = await handleDeleteImagesFromDisk(albumImageIds, `${album.name} images`);
+  const handleDeleteCollectionFromDisk = async (collectionId: string) => {
+    const collection = collections.find((entry) => entry.id === collectionId);
+    if (!collection) return;
+    const collectionImageIds = images
+      .filter((image) => image.collectionId === collectionId)
+      .map((image) => image.id);
+    if (!collectionImageIds.length) return;
+    const deletedIds = await handleDeleteImagesFromDisk(collectionImageIds, `${collection.name} images`);
     if (!deletedIds || deletedIds.length === 0) return;
     const deletedSet = new Set(deletedIds);
-    const remaining = images.filter((image) => image.albumId === albumId && !deletedSet.has(image.id));
+    const remaining = images.filter(
+      (image) => image.collectionId === collectionId && !deletedSet.has(image.id)
+    );
     if (remaining.length === 0) {
-      await removeAlbumFromIndex(albumId);
+      await removeCollectionFromIndex(collectionId);
     }
   };
 
-  const handleDeleteSelectedAlbumsFromDisk = async () => {
-    if (!selectedAlbumIds.size) return;
-    const ids = Array.from(selectedAlbumIds);
-    const albumImageIds = images
-      .filter((image) => selectedAlbumIds.has(image.albumId))
+  const handleDeleteSelectedCollectionsFromDisk = async () => {
+    if (!selectedCollectionIds.size) return;
+    const ids = Array.from(selectedCollectionIds);
+    const collectionImageIds = images
+      .filter((image) => selectedCollectionIds.has(image.collectionId))
       .map((image) => image.id);
-    if (!albumImageIds.length) return;
-    const deletedIds = await handleDeleteImagesFromDisk(albumImageIds, `${ids.length} album(s) images`);
+    if (!collectionImageIds.length) return;
+    const deletedIds = await handleDeleteImagesFromDisk(collectionImageIds, `${ids.length} collection(s) images`);
     if (!deletedIds || deletedIds.length === 0) return;
     const deletedSet = new Set(deletedIds);
     const remainingImages = images.filter((image) => !deletedSet.has(image.id));
-    const remainingAlbumIds = new Set(remainingImages.map((image) => image.albumId));
-    for (const albumId of ids) {
-      if (!remainingAlbumIds.has(albumId)) {
-        await removeAlbumFromIndex(albumId);
+    const remainingCollectionIds = new Set(remainingImages.map((image) => image.collectionId));
+    for (const collectionId of ids) {
+      if (!remainingCollectionIds.has(collectionId)) {
+        await removeCollectionFromIndex(collectionId);
       }
     }
   };
@@ -1997,57 +2115,57 @@ export default function App() {
     }
   };
 
-  const handleAlbumContextMenu = async (event: React.MouseEvent, album: Album) => {
+  const handleCollectionContextMenu = async (event: React.MouseEvent, collection: Collection) => {
     event.preventDefault();
     if (!bridgeAvailable || !window.comfy?.showContextMenu) return;
     const action = await window.comfy.showContextMenu({
-      type: "album",
-      albumId: album.id,
-      label: album.name,
-      selectedCount: selectedAlbumIds.size,
-      isSelected: selectedAlbumIds.has(album.id),
+      type: "collection",
+      collectionId: collection.id,
+      label: collection.name,
+      selectedCount: selectedCollectionIds.size,
+      isSelected: selectedCollectionIds.has(collection.id),
     });
-    if (action === "rename-album") {
-      startRenameAlbum(album);
+    if (action === "rename-collection") {
+      startRenameCollection(collection);
     }
-    if (action === "add-selected-albums-favorites") {
-      const targets = selectedAlbumIds.size ? selectedAlbumIds : new Set([album.id]);
+    if (action === "add-selected-collections-favorites") {
+      const targets = selectedCollectionIds.size ? selectedCollectionIds : new Set([collection.id]);
       for (const id of targets) {
-        const targetAlbum = albums.find((entry) => entry.id === id);
-        if (targetAlbum) {
-          await addAlbumToFavorites(targetAlbum);
+        const targetCollection = collections.find((entry) => entry.id === id);
+        if (targetCollection) {
+          await addCollectionToFavorites(targetCollection);
         }
       }
     }
-    if (action === "remove-selected-albums-favorites") {
-      const targets = selectedAlbumIds.size ? selectedAlbumIds : new Set([album.id]);
+    if (action === "remove-selected-collections-favorites") {
+      const targets = selectedCollectionIds.size ? selectedCollectionIds : new Set([collection.id]);
       for (const id of targets) {
-        const targetAlbum = albums.find((entry) => entry.id === id);
-        if (targetAlbum) {
-          await removeAlbumFromFavorites(targetAlbum);
+        const targetCollection = collections.find((entry) => entry.id === id);
+        if (targetCollection) {
+          await removeCollectionFromFavorites(targetCollection);
         }
       }
     }
-    if (action === "rescan-album") {
-      await handleRescanAlbums([album.id]);
+    if (action === "rescan-collection") {
+      await handleRescanCollections([collection.id]);
     }
-    if (action === "remove-selected-albums") {
-      await handleRemoveSelectedAlbums();
+    if (action === "remove-selected-collections") {
+      await handleRemoveSelectedCollections();
     }
-    if (action === "delete-selected-albums-disk") {
-      await handleDeleteSelectedAlbumsFromDisk();
+    if (action === "delete-selected-collections-disk") {
+      await handleDeleteSelectedCollectionsFromDisk();
     }
-    if (action === "reveal-album") {
-      await handleRevealInFolder(album.rootPath);
+    if (action === "reveal-collection") {
+      await handleRevealInFolder(collection.rootPath);
     }
-    if (action === "select-all-albums") {
-      handleSelectAllAlbums();
+    if (action === "select-all-collections") {
+      handleSelectAllCollections();
     }
-    if (action === "invert-album-selection") {
-      handleInvertAlbumSelection();
+    if (action === "invert-collection-selection") {
+      handleInvertCollectionSelection();
     }
-    if (action === "clear-album-selection") {
-      handleClearAlbumSelection();
+    if (action === "clear-collection-selection") {
+      handleClearCollectionSelection();
     }
   };
 
@@ -2077,16 +2195,16 @@ export default function App() {
     if (index <= 0) return "";
     return name.slice(index);
   };
-  const formatIndexSummary = (label: string, albumsAdded: number, imagesAdded: number, cancelled: boolean) => {
+  const formatIndexSummary = (label: string, collectionsAdded: number, imagesAdded: number, cancelled: boolean) => {
     const status = cancelled ? `${label} canceled` : `${label} complete`;
-    const albumLabel = albumsAdded === 1 ? "album" : "albums";
+    const collectionLabel = collectionsAdded === 1 ? "collection" : "collections";
     const imageLabel = imagesAdded === 1 ? "image" : "images";
-    return `${status} — added ${albumsAdded} ${albumLabel}, ${imagesAdded} ${imageLabel}`;
+    return `${status} — added ${collectionsAdded} ${collectionLabel}, ${imagesAdded} ${imageLabel}`;
   };
 
-  const handleRescanAlbums = async (albumIds: string[]) => {
+  const handleRescanCollections = async (collectionIds: string[]) => {
     if (!bridgeAvailable || !window.comfy?.indexFolders) return;
-    const targets = albums.filter((album) => albumIds.includes(album.id));
+    const targets = collections.filter((collection) => collectionIds.includes(collection.id));
     if (targets.length === 0) return;
     setIsIndexing(true);
     const token = { cancelled: false };
@@ -2098,16 +2216,18 @@ export default function App() {
       active: true,
       basePaths: new Set(images.map((image) => image.filePath)),
       addedPaths: new Set(),
-      addedAlbumRoots: new Set(),
+      addedCollectionRoots: new Set(),
     };
-    liveIndexQueueRef.current.albums = [];
+    liveIndexQueueRef.current.collections = [];
     liveIndexQueueRef.current.images = [];
     if (liveIndexQueueRef.current.timer) {
       window.clearTimeout(liveIndexQueueRef.current.timer);
       liveIndexQueueRef.current.timer = null;
     }
     try {
-      const targetImageList = images.filter((image) => targets.some((album) => album.id === image.albumId));
+      const targetImageList = images.filter((image) =>
+        targets.some((collection) => collection.id === image.collectionId)
+      );
       const missingPaths = window.comfy?.findMissingFiles
         ? await window.comfy.findMissingFiles(targetImageList.map((image) => image.filePath))
         : [];
@@ -2118,7 +2238,7 @@ export default function App() {
           .map((image) => image.id);
         await handleRemoveImages(missingIds, { confirm: false });
       }
-      const rootPaths = targets.map((album) => album.rootPath);
+  const rootPaths = targets.map((collection) => collection.rootPath);
       const imagesForIndex = missingPathSet.size > 0
         ? images.filter((image) => !missingPathSet.has(image.filePath))
         : images;
@@ -2137,19 +2257,19 @@ export default function App() {
         liveIndex.basePaths.forEach((path) => existingFilePaths.add(path));
         liveIndex.addedPaths.forEach((path) => existingFilePaths.add(path));
       }
-      const albumByRoot = new Map(targets.map((album) => [album.rootPath, album]));
+  const collectionByRoot = new Map(targets.map((collection) => [collection.rootPath, collection]));
       const newImages: IndexedImage[] = [];
 
       if (payload.length > 0) {
-        for (const albumPayload of payload) {
-          const album = albumByRoot.get(albumPayload.rootPath);
-          if (!album) continue;
-          const filtered = albumPayload.images.filter((image) => !existingFilePaths.has(image.filePath));
+        for (const collectionPayload of payload) {
+          const collection = collectionByRoot.get(collectionPayload.rootPath);
+          if (!collection) continue;
+          const filtered = collectionPayload.images.filter((image) => !existingFilePaths.has(image.filePath));
           if (filtered.length === 0) continue;
           filtered.forEach((image) => existingFilePaths.add(image.filePath));
-          const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
-            { type: "add-images", data: { albumId: album.id, images: filtered } },
-            async () => ({ album: null, images: await addImagesToAlbum(album.id, filtered) })
+          const result = await runIndexingTask<{ collection: Collection | null; images: IndexedImage[] }>(
+            { type: "add-images", data: { collectionId: collection.id, images: filtered } },
+            async () => ({ collection: null, images: await addImagesToCollection(collection.id, filtered) })
           );
           newImages.push(...result.images);
         }
@@ -2157,8 +2277,8 @@ export default function App() {
 
       const liveAddedImages = liveIndexRef.current?.addedPaths.size ?? 0;
       const totalImages = liveAddedImages + newImages.length;
-      const totalAlbums = liveIndexRef.current?.addedAlbumRoots.size ?? 0;
-      const summary = formatIndexSummary("Rescan", totalAlbums, totalImages, token.cancelled);
+  const totalCollections = liveIndexRef.current?.addedCollectionRoots.size ?? 0;
+  const summary = formatIndexSummary("Rescan", totalCollections, totalImages, token.cancelled);
       setToastMessage(summary);
       setLastCopied(summary);
 
@@ -2191,9 +2311,9 @@ export default function App() {
       active: true,
       basePaths: new Set(images.map((image) => image.filePath)),
       addedPaths: new Set(),
-      addedAlbumRoots: new Set(),
+      addedCollectionRoots: new Set(),
     };
-    liveIndexQueueRef.current.albums = [];
+    liveIndexQueueRef.current.collections = [];
     liveIndexQueueRef.current.images = [];
     if (liveIndexQueueRef.current.timer) {
       window.clearTimeout(liveIndexQueueRef.current.timer);
@@ -2208,11 +2328,11 @@ export default function App() {
       if (uniquePaths.length === 0) {
         return;
       }
-      const affectedAlbums = albums.filter((album) =>
-        uniquePaths.some((rootPath) => isPathWithinRoot(album.rootPath, rootPath))
+      const affectedCollections = collections.filter((collection) =>
+        uniquePaths.some((rootPath) => isPathWithinRoot(collection.rootPath, rootPath))
       );
-      const affectedAlbumIds = new Set(affectedAlbums.map((album) => album.id));
-      const affectedImages = images.filter((image) => affectedAlbumIds.has(image.albumId));
+      const affectedCollectionIds = new Set(affectedCollections.map((collection) => collection.id));
+      const affectedImages = images.filter((image) => affectedCollectionIds.has(image.collectionId));
       const missingPaths = window.comfy?.findMissingFiles
         ? await window.comfy.findMissingFiles(affectedImages.map((image) => image.filePath))
         : [];
@@ -2241,47 +2361,50 @@ export default function App() {
         liveIndex.basePaths.forEach((path) => existingFilePaths.add(path));
         liveIndex.addedPaths.forEach((path) => existingFilePaths.add(path));
       }
-      const albumByRoot = new Map(albums.map((album) => [album.rootPath, album]));
-      const newAlbums: Album[] = [];
+  const collectionByRoot = new Map(collections.map((collection) => [collection.rootPath, collection]));
+  const newCollections: Collection[] = [];
       const newImages: IndexedImage[] = [];
 
       if (payload.length > 0) {
-        for (const albumPayload of payload) {
-          const filtered = albumPayload.images.filter((image) => !existingFilePaths.has(image.filePath));
+        for (const collectionPayload of payload) {
+          const filtered = collectionPayload.images.filter((image) => !existingFilePaths.has(image.filePath));
           if (filtered.length === 0) continue;
           filtered.forEach((image) => existingFilePaths.add(image.filePath));
 
-          const existingAlbum = albumByRoot.get(albumPayload.rootPath);
-          if (existingAlbum) {
-            const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
-              { type: "add-images", data: { albumId: existingAlbum.id, images: filtered } },
-              async () => ({ album: null, images: await addImagesToAlbum(existingAlbum.id, filtered) })
+          const existingCollection = collectionByRoot.get(collectionPayload.rootPath);
+          if (existingCollection) {
+            const result = await runIndexingTask<{ collection: Collection | null; images: IndexedImage[] }>(
+              { type: "add-images", data: { collectionId: existingCollection.id, images: filtered } },
+              async () => ({
+                collection: null,
+                images: await addImagesToCollection(existingCollection.id, filtered),
+              })
             );
             newImages.push(...result.images);
             continue;
           }
 
-          const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
-            { type: "add-album", data: { rootPath: albumPayload.rootPath, images: filtered } },
-            async () => addAlbumWithImages(albumPayload.rootPath, filtered)
+          const result = await runIndexingTask<{ collection: Collection | null; images: IndexedImage[] }>(
+            { type: "add-collection", data: { rootPath: collectionPayload.rootPath, images: filtered } },
+            async () => addCollectionWithImages(collectionPayload.rootPath, filtered)
           );
-          if (result.album) {
-            newAlbums.push(result.album);
+          if (result.collection) {
+            newCollections.push(result.collection);
           }
           newImages.push(...result.images);
         }
       }
 
       const liveAddedImages = liveIndexRef.current?.addedPaths.size ?? 0;
-      const liveAddedAlbums = liveIndexRef.current?.addedAlbumRoots.size ?? 0;
+      const liveAddedCollections = liveIndexRef.current?.addedCollectionRoots.size ?? 0;
       const totalImages = liveAddedImages + newImages.length;
-      const totalAlbums = liveAddedAlbums + newAlbums.length;
-      const summary = formatIndexSummary("Indexing", totalAlbums, totalImages, token.cancelled);
+      const totalCollections = liveAddedCollections + newCollections.length;
+      const summary = formatIndexSummary("Indexing", totalCollections, totalImages, token.cancelled);
       setToastMessage(summary);
       setLastCopied(summary);
 
-      if (newAlbums.length > 0) {
-        setAlbums((prev) => [...prev, ...newAlbums]);
+      if (newCollections.length > 0) {
+        setCollections((prev) => [...prev, ...newCollections]);
       }
       if (newImages.length > 0) {
         const baseImages = newImages.map((image) => ({ ...image, fileUrl: image.filePath }));
@@ -2333,12 +2456,12 @@ export default function App() {
         void handleRemoveSelected();
         return;
       }
-      if (action === "remove-selected-albums") {
-        void handleRemoveSelectedAlbums();
+      if (action === "remove-selected-collections") {
+        void handleRemoveSelectedCollections();
         return;
       }
-      if (action === "rescan-selected-albums") {
-        void handleRescanAlbums(Array.from(selectedAlbumIds));
+      if (action === "rescan-selected-collections") {
+        void handleRescanCollections(Array.from(selectedCollectionIds));
         return;
       }
       if (action === "select-all-images") {
@@ -2353,24 +2476,24 @@ export default function App() {
         handleClearImageSelection();
         return;
       }
-      if (action === "select-all-albums") {
-        handleSelectAllAlbums();
+      if (action === "select-all-collections") {
+        handleSelectAllCollections();
         return;
       }
-      if (action === "invert-album-selection") {
-        handleInvertAlbumSelection();
+      if (action === "invert-collection-selection") {
+        handleInvertCollectionSelection();
         return;
       }
-      if (action === "clear-album-selection") {
-        handleClearAlbumSelection();
+      if (action === "clear-collection-selection") {
+        handleClearCollectionSelection();
         return;
       }
       if (action === "delete-selected-images-disk") {
         void handleDeleteImagesFromDisk(Array.from(selectedIds), `${selectedIds.size} selected images`);
         return;
       }
-      if (action === "delete-selected-albums-disk") {
-        void handleDeleteSelectedAlbumsFromDisk();
+      if (action === "delete-selected-collections-disk") {
+        void handleDeleteSelectedCollectionsFromDisk();
         return;
       }
       if (action === "add-selected-images-favorites") {
@@ -2381,23 +2504,23 @@ export default function App() {
         void removeFavoriteImages(Array.from(selectedIds), `${selectedIds.size} image(s) removed from favourites`);
         return;
       }
-      if (action === "add-selected-albums-favorites") {
+      if (action === "add-selected-collections-favorites") {
         void (async () => {
-          for (const id of selectedAlbumIds) {
-            const targetAlbum = albums.find((entry) => entry.id === id);
-            if (targetAlbum) {
-              await addAlbumToFavorites(targetAlbum);
+          for (const id of selectedCollectionIds) {
+            const targetCollection = collections.find((entry) => entry.id === id);
+            if (targetCollection) {
+              await addCollectionToFavorites(targetCollection);
             }
           }
         })();
         return;
       }
-      if (action === "remove-selected-albums-favorites") {
+      if (action === "remove-selected-collections-favorites") {
         void (async () => {
-          for (const id of selectedAlbumIds) {
-            const targetAlbum = albums.find((entry) => entry.id === id);
-            if (targetAlbum) {
-              await removeAlbumFromFavorites(targetAlbum);
+          for (const id of selectedCollectionIds) {
+            const targetCollection = collections.find((entry) => entry.id === id);
+            if (targetCollection) {
+              await removeCollectionFromFavorites(targetCollection);
             }
           }
         })();
@@ -2415,15 +2538,15 @@ export default function App() {
         }
         return;
       }
-      if (action === "rename-selected-album") {
+      if (action === "rename-selected-collection") {
         const target =
-          selectedAlbumIds.size === 1
-            ? albums.find((album) => selectedAlbumIds.has(album.id))
-            : activeAlbum !== "all"
-            ? albumById.get(activeAlbum) ?? null
+          selectedCollectionIds.size === 1
+            ? collections.find((collection) => selectedCollectionIds.has(collection.id))
+            : activeCollection !== "all"
+            ? collectionById.get(activeCollection) ?? null
             : null;
         if (target) {
-          startRenameAlbum(target);
+          startRenameCollection(target);
         }
         return;
       }
@@ -2435,10 +2558,11 @@ export default function App() {
         void handleOpenInEditor(fallbackImage?.filePath);
         return;
       }
-      if (action === "reveal-active-album") {
-        const targetAlbum = activeTab.type === "image" ? activeTab.image.albumId : activeAlbum;
-        const album = targetAlbum === "all" ? null : albumById.get(targetAlbum);
-        void handleRevealInFolder(album?.rootPath);
+      if (action === "reveal-active-collection") {
+        const targetCollection =
+          activeTab.type === "image" ? activeTab.image.collectionId : activeCollection;
+        const collection = targetCollection === "all" ? null : collectionById.get(targetCollection);
+        void handleRevealInFolder(collection?.rootPath);
         return;
       }
       if (action === "tab-next") {
@@ -2476,23 +2600,23 @@ export default function App() {
     bridgeAvailable,
     handleAddFolder,
     handleRemoveSelected,
-    handleRemoveSelectedAlbums,
-    handleDeleteSelectedAlbumsFromDisk,
+    handleRemoveSelectedCollections,
+    handleDeleteSelectedCollectionsFromDisk,
     handleDeleteImagesFromDisk,
     handleRevealInFolder,
     selectedIds,
     images,
-  albums,
+    collections,
     activeTab,
-    activeAlbum,
-    albumById,
-    selectedAlbumIds,
+    activeCollection,
+    collectionById,
+    selectedCollectionIds,
     startRenameImage,
-    startRenameAlbum,
+    startRenameCollection,
     addFavoriteImages,
     removeFavoriteImages,
-    addAlbumToFavorites,
-    removeAlbumFromFavorites,
+    addCollectionToFavorites,
+    removeCollectionFromFavorites,
     setAboutOpen,
     tabs,
   ]);
@@ -2501,37 +2625,40 @@ export default function App() {
     if (!bridgeAvailable || !window.comfy?.updateMenuState) return;
     const activeImage = activeTab.type === "image" ? activeTab.image : images.find((image) => selectedIds.has(image.id));
     const hasActiveImage = Boolean(activeImage);
-    const albumTargetId = activeTab.type === "image" ? activeTab.image.albumId : activeAlbum;
-    const hasActiveAlbum =
-      albumTargetId !== "all" && albumTargetId !== FAVORITES_ID && Boolean(albumById.get(albumTargetId));
+    const collectionTargetId =
+      activeTab.type === "image" ? activeTab.image.collectionId : activeCollection;
+    const hasActiveCollection =
+      collectionTargetId !== "all" &&
+      collectionTargetId !== FAVORITES_ID &&
+      Boolean(collectionById.get(collectionTargetId));
     const isLibraryTab = activeTab.type === "library";
     window.comfy.updateMenuState({
       hasActiveImage,
-      hasActiveAlbum,
+      hasActiveCollection,
       hasSelectedImages: isLibraryTab && selectedIds.size > 0,
-      hasSelectedAlbums: selectedAlbumIds.size > 0,
+      hasSelectedCollections: selectedCollectionIds.size > 0,
       hasSingleSelectedImage: activeTab.type === "image" || (isLibraryTab && selectedIds.size === 1),
-      hasSingleSelectedAlbum:
-        selectedAlbumIds.size === 1 ||
-        (activeAlbum !== "all" && activeAlbum !== FAVORITES_ID && selectedAlbumIds.size === 0),
+      hasSingleSelectedCollection:
+        selectedCollectionIds.size === 1 ||
+        (activeCollection !== "all" && activeCollection !== FAVORITES_ID && selectedCollectionIds.size === 0),
       hasImages: isLibraryTab && filteredImages.length > 0,
-      hasAlbums: albums.length > 0,
+      hasCollections: collections.length > 0,
       isIndexing,
-      isRemoving: !!(removalAlbumProgress || removalImageProgress),
+      isRemoving: !!(removalCollectionProgress || removalImageProgress),
       isDeleting: isDeletingFiles,
     });
   }, [
     bridgeAvailable,
     activeTab,
-    activeAlbum,
+    activeCollection,
     images,
     filteredImages,
-    albums,
+    collections,
     selectedIds,
-    selectedAlbumIds,
-    albumById,
+    selectedCollectionIds,
+    collectionById,
     isIndexing,
-    removalAlbumProgress,
+    removalCollectionProgress,
     removalImageProgress,
     isDeletingFiles,
   ]);
@@ -2693,10 +2820,10 @@ export default function App() {
     const unsubscribeImage = window.comfy.onIndexingImage((payload) => {
       setImageProgress({ current: payload.current, total: payload.total, label: payload.fileName });
     });
-    const unsubscribeAlbum = window.comfy.onIndexingAlbum(async (payload) => {
+    const unsubscribeCollection = window.comfy.onIndexingCollection(async (payload) => {
       const liveIndex = liveIndexRef.current;
       if (!liveIndex?.active) return;
-      const existingAlbum = albums.find((album) => album.rootPath === payload.rootPath);
+      const existingCollection = collections.find((collection) => collection.rootPath === payload.rootPath);
       const existingPaths = new Set<string>();
       liveIndex.basePaths.forEach((path) => existingPaths.add(path));
       liveIndex.addedPaths.forEach((path) => existingPaths.add(path));
@@ -2704,24 +2831,29 @@ export default function App() {
       if (filtered.length === 0) return;
       filtered.forEach((image) => liveIndex.addedPaths.add(image.filePath));
 
-      if (existingAlbum) {
-        const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
-          { type: "add-images", data: { albumId: existingAlbum.id, images: filtered } },
-          async () => ({ album: null, images: await addImagesToAlbum(existingAlbum.id, filtered) })
+      if (existingCollection) {
+        const result = await runIndexingTask<{ collection: Collection | null; images: IndexedImage[] }>(
+          { type: "add-images", data: { collectionId: existingCollection.id, images: filtered } },
+          async () => ({
+            collection: null,
+            images: await addImagesToCollection(existingCollection.id, filtered),
+          })
         );
         if (result.images.length > 0) {
           liveIndexQueueRef.current.images.push(...result.images);
         }
       } else {
-        const result = await runIndexingTask<{ album: Album | null; images: IndexedImage[] }>(
-          { type: "add-album", data: { rootPath: payload.rootPath, images: filtered } },
-          async () => addAlbumWithImages(payload.rootPath, filtered)
+        const result = await runIndexingTask<{ collection: Collection | null; images: IndexedImage[] }>(
+          { type: "add-collection", data: { rootPath: payload.rootPath, images: filtered } },
+          async () => addCollectionWithImages(payload.rootPath, filtered)
         );
-        if (result.album) {
-          setAlbums((prev) =>
-            prev.some((album) => album.rootPath === result.album!.rootPath) ? prev : [...prev, result.album!]
+        if (result.collection) {
+          setCollections((prev) =>
+            prev.some((collection) => collection.rootPath === result.collection!.rootPath)
+              ? prev
+              : [...prev, result.collection!]
           );
-          liveIndexRef.current?.addedAlbumRoots.add(payload.rootPath);
+          liveIndexRef.current?.addedCollectionRoots.add(payload.rootPath);
         }
         if (result.images.length > 0) {
           liveIndexQueueRef.current.images.push(...result.images);
@@ -2746,10 +2878,10 @@ export default function App() {
     return () => {
       unsubscribeFolder();
       unsubscribeImage();
-      unsubscribeAlbum();
+      unsubscribeCollection();
       unsubscribeComplete();
     };
-  }, [bridgeAvailable, albums, flushLiveIndexQueue, runIndexingTask]);
+  }, [bridgeAvailable, collections, flushLiveIndexQueue, runIndexingTask]);
 
   useEffect(() => {
     const target = gridRef.current;
@@ -2833,12 +2965,12 @@ export default function App() {
         <aside className="flex w-64 flex-col border-r border-slate-800 bg-slate-950/50 p-4">
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <div className="text-xs uppercase tracking-wide text-slate-400">Albums</div>
+              <div className="text-xs uppercase tracking-wide text-slate-400">Collections</div>
               <select
-                value={albumSort}
-                onChange={(event) => setAlbumSort(event.target.value as AlbumSort)}
+                value={collectionSort}
+                onChange={(event) => setCollectionSort(event.target.value as CollectionSort)}
                 className="rounded-md border border-slate-800 bg-slate-950 px-2 py-1 text-xs text-slate-300"
-                aria-label="Sort albums"
+                aria-label="Sort collections"
               >
                 <option value="name-asc">Name A → Z</option>
                 <option value="name-desc">Name Z → A</option>
@@ -2848,9 +2980,11 @@ export default function App() {
             </div>
             <div className="flex items-center justify-between">
               <button
-                onClick={() => setActiveAlbum("all")}
+                onClick={() => setActiveCollection("all")}
                 className={`w-full rounded-lg px-3 py-2 text-left text-sm ${
-                  albumHighlightId === "all" ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900"
+                  collectionHighlightId === "all"
+                    ? "bg-slate-800 text-white"
+                    : "text-slate-300 hover:bg-slate-900"
                 }`}
               >
                 All Images
@@ -2858,9 +2992,9 @@ export default function App() {
             </div>
             <div className="flex items-center justify-between">
               <button
-                onClick={() => setActiveAlbum(FAVORITES_ID)}
+                onClick={() => setActiveCollection(FAVORITES_ID)}
                 className={`w-full rounded-lg px-3 py-2 text-left text-sm ${
-                  albumHighlightId === FAVORITES_ID
+                  collectionHighlightId === FAVORITES_ID
                     ? "bg-slate-800 text-white"
                     : "text-slate-300 hover:bg-slate-900"
                 }`}
@@ -2870,30 +3004,32 @@ export default function App() {
             </div>
           </div>
           <div className="mt-3 flex-1 space-y-2 overflow-auto">
-            {sortedAlbums.map((album) => (
+            {sortedCollections.map((collection) => (
               <div
-                key={album.id}
-                onContextMenu={(event) => void handleAlbumContextMenu(event, album)}
+                key={collection.id}
+                onContextMenu={(event) => void handleCollectionContextMenu(event, collection)}
                 className={`rounded-lg px-3 py-2 text-left text-sm ${
-                  albumHighlightId === album.id ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900"
+                  collectionHighlightId === collection.id
+                    ? "bg-slate-800 text-white"
+                    : "text-slate-300 hover:bg-slate-900"
                 }`}
               >
                 <label className="flex min-w-0 cursor-pointer items-start gap-2">
                   <input
                     type="checkbox"
-                    checked={selectedAlbumIds.has(album.id)}
-                    onChange={() => handleToggleAlbumSelection(album.id)}
+                    checked={selectedCollectionIds.has(collection.id)}
+                    onChange={() => handleToggleCollectionSelection(collection.id)}
                     className="mt-1 h-3.5 w-3.5 rounded border-slate-600 bg-slate-900"
-                    aria-label={`Select ${album.name}`}
+                    aria-label={`Select ${collection.name}`}
                   />
-                  {renameState?.type === "album" && renameState.id === album.id ? (
+                  {renameState?.type === "collection" && renameState.id === collection.id ? (
                     <div className="min-w-0 flex-1 text-left">
                       <input
                         ref={renameInputRef}
                         value={renameState.value}
                         onChange={(event) =>
                           setRenameState((prev) =>
-                            prev && prev.type === "album" && prev.id === album.id
+                            prev && prev.type === "collection" && prev.id === collection.id
                               ? { ...prev, value: event.target.value }
                               : prev
                           )
@@ -2918,17 +3054,17 @@ export default function App() {
                           void commitRename();
                         }}
                         className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100"
-                        aria-label="Rename album"
+                        aria-label="Rename collection"
                       />
-                      <div className="truncate text-xs text-slate-400" title={album.rootPath}>
-                        {album.rootPath}
+                      <div className="truncate text-xs text-slate-400" title={collection.rootPath}>
+                        {collection.rootPath}
                       </div>
                     </div>
                   ) : (
-                    <button onClick={() => setActiveAlbum(album.id)} className="min-w-0 flex-1 text-left">
-                      <div className="font-medium">{album.name}</div>
-                      <div className="truncate text-xs text-slate-400" title={album.rootPath}>
-                        {album.rootPath}
+                    <button onClick={() => setActiveCollection(collection.id)} className="min-w-0 flex-1 text-left">
+                      <div className="font-medium">{collection.name}</div>
+                      <div className="truncate text-xs text-slate-400" title={collection.rootPath}>
+                        {collection.rootPath}
                       </div>
                     </button>
                   )}
@@ -3001,35 +3137,35 @@ export default function App() {
             <div className="flex items-center justify-between">
               <div className="relative">
                 <button
-                  onClick={handleRemoveSelectedAlbums}
-                  disabled={selectedAlbumIds.size === 0 || !!(removalAlbumProgress || removalImageProgress)}
+                  onClick={handleRemoveSelectedCollections}
+                  disabled={selectedCollectionIds.size === 0 || !!(removalCollectionProgress || removalImageProgress)}
                   className="rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-200 disabled:opacity-40"
                 >
                   Remove selected
                 </button>
-                {removalAlbumProgress || removalImageProgress ? (
+                {removalCollectionProgress || removalImageProgress ? (
                   <div className="pointer-events-auto absolute bottom-full left-0 z-10 mb-2 w-56 min-h-[110px] rounded-lg border border-slate-700 bg-slate-950/95 px-3 py-2 text-[11px] text-slate-200 shadow-lg">
                     <div className="flex items-center gap-2 text-xs">
                       <div className="h-2 w-2 animate-pulse rounded-full bg-rose-400" />
-                      <span>{removalAlbumProgress ? "Removing albums…" : "Removing images…"}</span>
+                      <span>{removalCollectionProgress ? "Removing collections…" : "Removing images…"}</span>
                     </div>
                     <div className="mt-2 space-y-2">
-                      {removalAlbumProgress ? (
+                      {removalCollectionProgress ? (
                         <div>
                           <div className="flex items-center justify-between">
-                            <span>Albums</span>
-                            <span>{`${removalAlbumProgress.current} / ${removalAlbumProgress.total}`}</span>
+                            <span>Collections</span>
+                            <span>{`${removalCollectionProgress.current} / ${removalCollectionProgress.total}`}</span>
                           </div>
                           <progress
                             className="progress-bar"
-                            value={removalAlbumProgress.current}
-                            max={removalAlbumProgress.total}
+                            value={removalCollectionProgress.current}
+                            max={removalCollectionProgress.total}
                           />
                           <div
                             className="mt-1 truncate text-[10px] text-slate-400"
-                            title={removalAlbumProgress.label}
+                            title={removalCollectionProgress.label}
                           >
-                            {removalAlbumProgress.label}
+                            {removalCollectionProgress.label}
                           </div>
                         </div>
                       ) : null}
@@ -3066,7 +3202,7 @@ export default function App() {
                   </div>
                 ) : null}
               </div>
-              <div className="text-[11px] text-slate-500">{selectedAlbumIds.size} selected</div>
+              <div className="text-[11px] text-slate-500">{selectedCollectionIds.size} selected</div>
             </div>
             <button
               type="button"
@@ -3086,7 +3222,7 @@ export default function App() {
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 onFocus={(event) => event.currentTarget.select()}
-                placeholder="Search by filename, album, or metadata…"
+                placeholder="Search by filename, collection, or metadata…"
                 aria-label="Search images"
                 className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 pr-8 text-sm text-slate-100"
               />
@@ -3292,7 +3428,7 @@ export default function App() {
                               }`}
                               draggable={false}
                               onLoad={() => {
-                                setLoadedThumbs((prev) => new Set(prev).add(image.id));
+                                markThumbLoaded(image.id);
                               }}
                             />
                           </div>
@@ -3378,7 +3514,7 @@ export default function App() {
                             }`}
                             draggable={false}
                             onLoad={() => {
-                              setLoadedThumbs((prev) => new Set(prev).add(image.id));
+                              markThumbLoaded(image.id);
                             }}
                           />
                           <span
@@ -3531,7 +3667,7 @@ export default function App() {
                   </button>
                 </div>
                 <div className="mt-4 space-y-2">
-                  <div>Album: {albumById.get(activeTabContent.albumId)?.name ?? "Unknown"}</div>
+                  <div>Collection: {collectionById.get(activeTabContent.collectionId)?.name ?? "Unknown"}</div>
                   <div>Size: {formatBytes(activeTabContent.sizeBytes)}</div>
                   {activeTabContent.width && activeTabContent.height ? (
                     <div>

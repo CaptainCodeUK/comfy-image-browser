@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import { removeAlbumRecord, removeImagesById } from "./db";
+import { removeCollectionRecord, removeImagesById } from "./db";
 
 type RemovalItem = { id: string; label: string };
 
@@ -11,10 +11,10 @@ type RemoveImagesMessage = {
   batchSize: number;
 };
 
-type RemoveAlbumMessage = {
-  type: "remove-album";
+type RemoveCollectionMessage = {
+  type: "remove-collection";
   requestId: string;
-  albumId: string;
+  collectionId: string;
   items: RemovalItem[];
   batchSize: number;
 };
@@ -24,7 +24,7 @@ type CancelMessage = {
   requestId: string;
 };
 
-type IncomingMessage = RemoveImagesMessage | RemoveAlbumMessage | CancelMessage;
+type IncomingMessage = RemoveImagesMessage | RemoveCollectionMessage | CancelMessage;
 
 type ProgressMessage = {
   type: "progress";
@@ -88,9 +88,9 @@ self.onmessage = async (event: MessageEvent<IncomingMessage>) => {
       postDone({ type: "done", requestId: message.requestId });
       return;
     }
-    if (message.type === "remove-album") {
+    if (message.type === "remove-collection") {
       await removeItems(message.requestId, message.items, message.batchSize);
-      await removeAlbumRecord(message.albumId);
+      await removeCollectionRecord(message.collectionId);
       postDone({ type: "done", requestId: message.requestId });
     }
   } catch (error) {

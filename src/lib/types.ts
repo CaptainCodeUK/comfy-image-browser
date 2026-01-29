@@ -1,4 +1,4 @@
-export type Album = {
+export type Collection = {
   id: string;
   name: string;
   rootPath: string;
@@ -8,7 +8,7 @@ export type Album = {
 export type IndexedImagePayload = {
   filePath: string;
   fileName: string;
-  albumRoot: string;
+  collectionRoot: string;
   sizeBytes: number;
   createdAt: string;
   width?: number;
@@ -19,7 +19,7 @@ export type IndexedImagePayload = {
 
 export type IndexedImage = {
   id: string;
-  albumId: string;
+  collectionId: string;
   filePath: string;
   fileName: string;
   fileUrl: string;
