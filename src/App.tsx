@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent } from "react";
 import {
   addCollectionWithImages,
   addImagesToCollection,
@@ -16,8 +17,11 @@ import {
 } from "./lib/db";
 import type { Collection, IndexedImage, IndexedImagePayload } from "./lib/types";
 import { sortCollections } from "./lib/collectionSort";
+import { formatBytes } from "./lib/formatBytes";
+import { toComfyUrl } from "./lib/fileUrl";
 import { BulkRenameModal } from "./components/BulkRenameModal";
 import { CollectionSidebar } from "./components/CollectionSidebar";
+import { ImageGrid } from "./components/ImageGrid";
 import { useContextMenuDispatcher } from "./hooks/useContextMenuDispatcher";
 import { MenuActionBridge } from "./components/MenuActionBridge";
 import type { CollectionSort, ProgressState, RenameState } from "./lib/appTypes";
@@ -31,8 +35,6 @@ const FILE_URL_BATCH_SIZE = 30;
 const REMOVAL_BATCH_SIZE = 50;
 const FAVORITES_ID = "favorites";
 const THUMBNAIL_CACHE_LIMIT = 2000;
-
-const toComfyUrl = (filePath: string) => `comfy://local?path=${encodeURIComponent(filePath)}`;
 
 type Tab =
   | { id: "library"; title: "Library"; type: "library" }
@@ -87,10 +89,7 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
   const parsedPrompt = parseJsonValue(metadata.prompt);
   const parsedWorkflow = parseJsonValue(metadata.workflow);
   const parsed = (parsedPrompt && typeof parsedPrompt === "object" ? parsedPrompt : {}) as Record<string, MetadataValue>;
-  const fallback = (parsedWorkflow && typeof parsedWorkflow === "object" ? parsedWorkflow : {}) as Record<
-    string,
-    MetadataValue
-  >;
+  const fallback = (parsedWorkflow && typeof parsedWorkflow === "object" ? parsedWorkflow : {}) as Record<string, MetadataValue>;
 
   const promptNodes = parsed && typeof parsed === "object" ? Object.values(parsed) : [];
   const workflowNodes = Array.isArray(fallback.nodes) ? fallback.nodes : [];
@@ -230,14 +229,6 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
 
 const LibraryTab: Tab = { id: "library", title: "Library", type: "library" };
 
-const formatBytes = (value: number) => {
-  if (value < 1024) return `${value} B`;
-  const kb = value / 1024;
-  if (kb < 1024) return `${kb.toFixed(1)} KB`;
-  const mb = kb / 1024;
-  return `${mb.toFixed(1)} MB`;
-};
-
 export default function App() {
   const [collections, setCollections] = useState<Collection[]>([]);
   const [images, setImages] = useState<IndexedImage[]>([]);
@@ -286,13 +277,6 @@ export default function App() {
   const [gridMetrics, setGridMetrics] = useState({ width: 0, height: 0, scrollTop: 0 });
   const gridRef = useRef<HTMLDivElement | null>(null);
   const gridInnerRef = useRef<HTMLDivElement | null>(null);
-  const assignVirtualPosition = (node: HTMLElement | null, top: number, left: number, width: number, height: number) => {
-    if (!node) return;
-    node.style.top = `${top}px`;
-    node.style.left = `${left}px`;
-    node.style.width = `${width}px`;
-    node.style.height = `${height}px`;
-  };
   const [thumbnailMap, setThumbnailMap] = useState<Record<string, string>>({});
   const [loadedThumbs, setLoadedThumbs] = useState<Set<string>>(new Set());
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
@@ -1371,7 +1355,7 @@ export default function App() {
     };
   }, [visibleImages, bridgeAvailable, thumbnailRetryTick, pruneThumbnailCache, removeLoadedThumbs]);
 
-  const toggleSelection = (id: string, multi: boolean) => {
+  const toggleSelection = useCallback((id: string, multi: boolean) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (!multi) {
@@ -1390,7 +1374,29 @@ export default function App() {
       }
       return next;
     });
-  };
+  }, []);
+
+  const handleImageClick = useCallback(
+    (image: IndexedImage, absoluteIndex: number, event: MouseEvent<HTMLButtonElement>) => {
+      const isMeta = event.metaKey || event.ctrlKey;
+      if (event.shiftKey && filteredImageCount > 0) {
+        const anchor = selectionAnchor ?? absoluteIndex;
+        const rangeIds = getRangeIds(anchor, absoluteIndex);
+        setSelectedIds((prev) => {
+          if (isMeta) {
+            return new Set([...prev, ...rangeIds]);
+          }
+          return rangeIds;
+        });
+        setSelectionAnchor(anchor);
+      } else {
+        toggleSelection(image.id, isMeta);
+        setSelectionAnchor(absoluteIndex);
+      }
+      setFocusedIndex(absoluteIndex);
+    },
+    [filteredImageCount, getRangeIds, selectionAnchor, toggleSelection, setFocusedIndex, setSelectionAnchor]
+  );
 
   const handleOpenImages = async (imagesToOpen: IndexedImage[]) => {
     setTabs((prev) => {
@@ -3282,149 +3288,33 @@ export default function App() {
                 }}
                 className="h-full overflow-auto p-4 scrollbar-thin"
               >
-                <div className="relative" ref={gridInnerRef}>
-                  {visibleImages.map((image, index) => {
-                    const absoluteIndex = startIndex + index;
-                    const row = Math.floor(absoluteIndex / gridColumnCount);
-                    const col = absoluteIndex % gridColumnCount;
-                    const top = row * rowHeight;
-                    const left = col * (iconSize + GRID_GAP);
-                    const height = rowHeight - GRID_GAP;
-                    const isSelected = selectedIds.has(image.id);
-                    const thumbUrl = thumbnailMap[image.id] ?? (image.fileUrl === image.filePath ? toComfyUrl(image.filePath) : image.fileUrl);
-                    const isLoaded = loadedThumbs.has(image.id);
-
-                    const isRenaming = renameState?.type === "image" && renameState.id === image.id;
-                    const isFavorite = favoriteIds.has(image.id);
-
-                    if (isRenaming) {
-                      return (
-                        <div
-                          key={image.id}
-                          ref={(node) =>
-                            assignVirtualPosition(node, top, left, iconSize, height)
-                          }
-                          className={`absolute rounded-xl border p-2 text-left ${isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800"
-                            } ${absoluteIndex === focusedIndex ? "ring-2 ring-indigo-400" : ""}`}
-                        >
-                          <div className="relative aspect-square overflow-hidden rounded-lg bg-slate-950 p-1">
-                            {!isLoaded ? (
-                              <div className="absolute inset-0 animate-pulse rounded-lg bg-slate-900" />
-                            ) : null}
-                            <img
-                              src={thumbUrl}
-                              alt={image.fileName}
-                              loading="lazy"
-                              className={`h-full w-full object-contain transition-opacity ${isLoaded ? "opacity-100" : "opacity-0"
-                                }`}
-                              draggable={false}
-                              onLoad={() => {
-                                markThumbLoaded(image.id);
-                              }}
-                            />
-                          </div>
-                          <input
-                            ref={renameInputRef}
-                            value={renameState.value}
-                            onChange={(event) =>
-                              setRenameState((prev) =>
-                                prev && prev.type === "image" && prev.id === image.id
-                                  ? { ...prev, value: event.target.value }
-                                  : prev
-                              )
-                            }
-                            onClick={(event) => event.stopPropagation()}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                event.preventDefault();
-                                void commitRename();
-                              }
-                              if (event.key === "Escape") {
-                                event.preventDefault();
-                                renameCancelRef.current = true;
-                                cancelRename();
-                              }
-                            }}
-                            onBlur={() => {
-                              if (renameCancelRef.current) {
-                                renameCancelRef.current = false;
-                                return;
-                              }
-                              void commitRename();
-                            }}
-                            className="mt-2 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100"
-                            aria-label="Rename image"
-                          />
-                          <div className="text-[11px] text-slate-500">{formatBytes(image.sizeBytes)}</div>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <button
-                        key={image.id}
-                        type="button"
-                        onContextMenu={(event) => void handleImageContextMenu(event, image)}
-                        onClick={(event) => {
-                          const isMeta = event.metaKey || event.ctrlKey;
-                          if (event.shiftKey && filteredImages.length > 0) {
-                            const anchor = selectionAnchor ?? absoluteIndex;
-                            const rangeIds = getRangeIds(anchor, absoluteIndex);
-                            setSelectedIds((prev) => {
-                              if (isMeta) {
-                                return new Set([...prev, ...rangeIds]);
-                              }
-                              return rangeIds;
-                            });
-                            setSelectionAnchor(anchor);
-                          } else {
-                            toggleSelection(image.id, isMeta);
-                            setSelectionAnchor(absoluteIndex);
-                          }
-                          setFocusedIndex(absoluteIndex);
-                        }}
-                        onDoubleClick={() => {
-                          void handleOpenImages([image]);
-                        }}
-                        ref={(node) => assignVirtualPosition(node, top, left, iconSize, height)}
-                        className={`absolute rounded-xl border p-2 text-left ${isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800 hover:border-slate-600"
-                          } ${absoluteIndex === focusedIndex ? "ring-2 ring-indigo-400" : ""}`}
-                      >
-                        <div className="relative aspect-square overflow-hidden rounded-lg bg-slate-950 p-1">
-                          {!isLoaded ? (
-                            <div className="absolute inset-0 animate-pulse rounded-lg bg-slate-900" />
-                          ) : null}
-                          <img
-                            src={thumbUrl}
-                            alt={image.fileName}
-                            loading="lazy"
-                            className={`h-full w-full object-contain transition-opacity ${isLoaded ? "opacity-100" : "opacity-0"
-                              }`}
-                            draggable={false}
-                            onLoad={() => {
-                              markThumbLoaded(image.id);
-                            }}
-                          />
-                          <span
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void toggleFavoriteImage(image);
-                            }}
-                            className={`absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full text-xs transition ${isFavorite
-                                ? "bg-amber-400/90 text-slate-900"
-                                : "bg-slate-800/80 text-slate-300 hover:bg-slate-700"
-                              }`}
-                            title={isFavorite ? "Remove from favourites" : "Add to favourites"}
-                          >
-                            ★
-                          </span>
-                        </div>
-                        <div className="mt-2 text-xs text-slate-300">{image.fileName}</div>
-                        <div className="text-[11px] text-slate-500">{formatBytes(image.sizeBytes)}</div>
-                      </button>
-                    );
-                  })}
-                </div>
+                <ImageGrid
+                  innerRef={gridInnerRef}
+                  gridGap={GRID_GAP}
+                  iconSize={iconSize}
+                  rowHeight={rowHeight}
+                  gridColumnCount={gridColumnCount}
+                  startIndex={startIndex}
+                  visibleImages={visibleImages}
+                  selectedIds={selectedIds}
+                  favoriteIds={favoriteIds}
+                  thumbnailMap={thumbnailMap}
+                  loadedThumbs={loadedThumbs}
+                  renameState={renameState}
+                  renameInputRef={renameInputRef}
+                  renameCancelRef={renameCancelRef}
+                  setRenameState={setRenameState}
+                  commitRename={commitRename}
+                  cancelRename={cancelRename}
+                  handleImageContextMenu={handleImageContextMenu}
+                  onImageClick={handleImageClick}
+                  onImageDoubleClick={(image) => {
+                    void handleOpenImages([image]);
+                  }}
+                  onFavoriteToggle={toggleFavoriteImage}
+                  markThumbLoaded={markThumbLoaded}
+                  focusedIndex={focusedIndex}
+                />
               </div>
             </section>
           ) : activeTabContent ? (
