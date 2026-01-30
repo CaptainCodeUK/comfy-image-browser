@@ -15,6 +15,7 @@ import {
   updateImageFileInfo,
 } from "./lib/db";
 import type { Collection, IndexedImage, IndexedImagePayload } from "./lib/types";
+import { sortCollections } from "./lib/collectionSort";
 import { BulkRenameModal } from "./components/BulkRenameModal";
 import { CollectionSidebar } from "./components/CollectionSidebar";
 import { useContextMenuDispatcher } from "./hooks/useContextMenuDispatcher";
@@ -1003,24 +1004,10 @@ export default function App() {
     }
   }, [activeCollection]);
 
-  const sortedCollections = useMemo(() => {
-    const sorted = [...collections];
-    sorted.sort((a, b) => {
-      switch (collectionSort) {
-        case "name-asc":
-          return a.name.localeCompare(b.name);
-        case "name-desc":
-          return b.name.localeCompare(a.name);
-        case "added-asc":
-          return new Date(a.addedAt).getTime() - new Date(b.addedAt).getTime();
-        case "added-desc":
-          return new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime();
-        default:
-          return 0;
-      }
-    });
-    return sorted;
-  }, [collections, collectionSort]);
+  const sortedCollections = useMemo(
+    () => sortCollections(collections, collectionSort),
+    [collections, collectionSort]
+  );
 
   const collectionIds = useMemo(() => sortedCollections.map((collection) => collection.id), [sortedCollections]);
 
