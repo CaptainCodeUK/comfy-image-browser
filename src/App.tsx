@@ -17,6 +17,7 @@ import {
 } from "./lib/db";
 import type { Collection, IndexedImage, IndexedImagePayload } from "./lib/types";
 import { BulkRenameModal } from "./components/BulkRenameModal";
+import { useContextMenuDispatcher } from "./hooks/useContextMenuDispatcher";
 import { MenuActionBridge } from "./components/MenuActionBridge";
 
 const DEFAULT_ICON_SIZE = 180;
@@ -2156,14 +2157,19 @@ export default function App() {
       });
       const renamedIds = renameResults.map((entry) => entry.id);
       removeThumbnailEntries(renamedIds);
-      hydrateFileUrls(
-        renameResults.map((entry) => ({
-          id: entry.id,
-          fileName: entry.fileName,
-          filePath: entry.filePath,
-          fileUrl: entry.filePath,
-        }))
-      );
+      const renamedForHydration = renameResults
+        .map((entry) => {
+          const original = imageById.get(entry.id);
+          if (!original) return null;
+          return {
+            ...original,
+            fileName: entry.fileName,
+            filePath: entry.filePath,
+            fileUrl: entry.filePath,
+          };
+        })
+        .filter((entry): entry is IndexedImage => Boolean(entry));
+      hydrateFileUrls(renamedForHydration);
       const successMessage = `Renamed ${renameResults.length} image${renameResults.length === 1 ? "" : "s"}`;
       setToastMessage(successMessage);
       setLastCopied(successMessage);
@@ -2545,104 +2551,6 @@ export default function App() {
     }
   };
 
-  const handleImageContextMenu = async (event: React.MouseEvent, image: IndexedImage) => {
-    event.preventDefault();
-    if (!bridgeAvailable || !window.comfy?.showContextMenu) return;
-    const action = await window.comfy.showContextMenu({
-      type: "image",
-      imageId: image.id,
-      label: image.fileName,
-      selectedCount: selectedIds.size,
-      isSelected: selectedIds.has(image.id),
-    });
-    if (action === "rename-image") {
-      startRenameImage(image);
-    }
-    if (action === "add-selected-images-favorites") {
-      await addFavoriteImages(Array.from(selectedIds), `${selectedIds.size} image(s) added to favourites`);
-    }
-    if (action === "remove-selected-images-favorites") {
-      await removeFavoriteImages(Array.from(selectedIds), `${selectedIds.size} image(s) removed from favourites`);
-    }
-    if (action === "remove-selected-images") {
-      await handleRemoveImages(Array.from(selectedIds));
-    }
-    if (action === "delete-selected-images-disk") {
-      await handleDeleteImagesFromDisk(Array.from(selectedIds), `${selectedIds.size} selected images`);
-    }
-    if (action === "reveal-image") {
-      await handleRevealInFolder(image.filePath);
-    }
-    if (action === "edit-image") {
-      await handleOpenInEditor(image.filePath);
-    }
-    if (action === "select-all-images") {
-      handleSelectAllImages();
-    }
-    if (action === "invert-image-selection") {
-      handleInvertImageSelection();
-    }
-    if (action === "clear-image-selection") {
-      handleClearImageSelection();
-    }
-    if (action === "bulk-rename-selected-images") {
-      handleOpenBulkRename();
-    }
-  };
-
-  const handleCollectionContextMenu = async (event: React.MouseEvent, collection: Collection) => {
-    event.preventDefault();
-    if (!bridgeAvailable || !window.comfy?.showContextMenu) return;
-    const action = await window.comfy.showContextMenu({
-      type: "collection",
-      collectionId: collection.id,
-      label: collection.name,
-      selectedCount: selectedCollectionIds.size,
-      isSelected: selectedCollectionIds.has(collection.id),
-    });
-    if (action === "rename-collection") {
-      startRenameCollection(collection);
-    }
-    if (action === "add-selected-collections-favorites") {
-      const targets = selectedCollectionIds.size ? selectedCollectionIds : new Set([collection.id]);
-      for (const id of targets) {
-        const targetCollection = collections.find((entry) => entry.id === id);
-        if (targetCollection) {
-          await addCollectionToFavorites(targetCollection);
-        }
-      }
-    }
-    if (action === "remove-selected-collections-favorites") {
-      const targets = selectedCollectionIds.size ? selectedCollectionIds : new Set([collection.id]);
-      for (const id of targets) {
-        const targetCollection = collections.find((entry) => entry.id === id);
-        if (targetCollection) {
-          await removeCollectionFromFavorites(targetCollection);
-        }
-      }
-    }
-    if (action === "rescan-collection") {
-      await handleRescanCollections([collection.id]);
-    }
-    if (action === "remove-selected-collections") {
-      await handleRemoveSelectedCollections();
-    }
-    if (action === "delete-selected-collections-disk") {
-      await handleDeleteSelectedCollectionsFromDisk();
-    }
-    if (action === "reveal-collection") {
-      await handleRevealInFolder(collection.rootPath);
-    }
-    if (action === "select-all-collections") {
-      handleSelectAllCollections();
-    }
-    if (action === "invert-collection-selection") {
-      handleInvertCollectionSelection();
-    }
-    if (action === "clear-collection-selection") {
-      handleClearCollectionSelection();
-    }
-  };
 
   const handleCollectionListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const navigationKeys = [
@@ -2828,7 +2736,35 @@ export default function App() {
       }
       setIsIndexing(false);
     }
+
   };
+
+  const { handleImageContextMenu, handleCollectionContextMenu } = useContextMenuDispatcher({
+    bridgeAvailable,
+    selectedIds,
+    selectedCollectionIds,
+    collections,
+    startRenameImage,
+    startRenameCollection,
+    addFavoriteImages,
+    removeFavoriteImages,
+    addCollectionToFavorites,
+    removeCollectionFromFavorites,
+    handleRemoveImages,
+    handleRevealInFolder,
+    handleOpenInEditor,
+    handleDeleteImagesFromDisk,
+    handleOpenBulkRename,
+    handleRescanCollections,
+    handleRemoveSelectedCollections,
+    handleDeleteSelectedCollectionsFromDisk,
+    handleSelectAllImages,
+    handleInvertImageSelection,
+    handleClearImageSelection,
+    handleSelectAllCollections,
+    handleInvertCollectionSelection,
+    handleClearCollectionSelection,
+  });
 
   const handleAddFolder = async () => {
     if (isIndexing) return;
