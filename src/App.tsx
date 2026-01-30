@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";
 import {
   addCollectionWithImages,
@@ -16,6 +16,7 @@ import {
   updateImageFileInfo,
 } from "./lib/db";
 import type { Collection, IndexedImage, IndexedImagePayload } from "./lib/types";
+import { BulkRenameModal } from "./components/BulkRenameModal";
 
 const DEFAULT_ICON_SIZE = 180;
 const GRID_GAP = 16;
@@ -306,12 +307,16 @@ export default function App() {
   const [bulkRenameDigits, setBulkRenameDigits] = useState(3);
   const [bulkRenaming, setBulkRenaming] = useState(false);
   const [bulkRenameError, setBulkRenameError] = useState<string | null>(null);
-  const bulkRenameBaseInputId = useId();
-  const bulkRenameDigitsInputId = useId();
-  const bulkRenameDigitsHelperId = useId();
-  const bulkRenameBaseInputRef = useRef<HTMLInputElement | null>(null);
-  const bulkRenameDigitsInputRef = useRef<HTMLInputElement | null>(null);
-  const bulkRenameDialogRef = useRef<HTMLDivElement | null>(null);
+  const handleBulkRenameBaseChange = useCallback((value: string) => {
+    setBulkRenameBase(value);
+  }, []);
+  const handleBulkRenameDigitsChange = useCallback((value: number) => {
+    setBulkRenameDigits(Math.max(1, value || 1));
+  }, []);
+  const handleBulkRenameCancel = useCallback(() => {
+    setBulkRenameOpen(false);
+    setBulkRenameError(null);
+  }, []);
   const [metadataSummary, setMetadataSummary] = useState<ReturnType<typeof extractMetadataSummary> | null>(null);
   const [isImageLoading, setIsImageLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -389,6 +394,7 @@ export default function App() {
     handleCloseTab: (_tabId: string) => undefined,
     handleCloseOtherTabs: (_tabId: string) => undefined,
     handleCloseAllTabs: () => undefined,
+    handleOpenBulkRename: () => undefined,
     setAboutOpen: (_open: boolean) => undefined,
   });
   const removalWorkerRef = useRef<Worker | null>(null);
@@ -2195,61 +2201,12 @@ export default function App() {
     }
   }, [bulkRenameBase, bulkRenameDigits, hydrateFileUrls, removeThumbnailEntries, selectedOrderedImages, setToastMessage, setLastCopied]);
 
-  const handleBulkRenameDialogKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      if (!bulkRenameOpen) return;
-      const focusableSelector = "button:not([disabled]), input:not([disabled])";
-      const modal = bulkRenameDialogRef.current;
-      if (event.key === "Tab" && modal) {
-        const focusable = Array.from(modal.querySelectorAll<HTMLElement>(focusableSelector));
-        if (focusable.length === 0) return;
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
-      if (event.key === "Enter") {
-        if (
-          document.activeElement instanceof HTMLButtonElement &&
-          document.activeElement.dataset.action === "cancel"
-        ) {
-          return;
-        }
-        event.preventDefault();
-        if (!bulkRenaming) {
-          void handleBulkRename();
-        }
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setBulkRenameOpen(false);
-        setBulkRenameError(null);
-      }
-    },
-    [bulkRenameOpen, bulkRenaming, handleBulkRename]
-  );
-
   useEffect(() => {
     if (bulkRenameOpen && selectedOrderedImages.length === 0) {
       setBulkRenameOpen(false);
     }
   }, [bulkRenameOpen, selectedOrderedImages.length]);
 
-  useEffect(() => {
-    if (!bulkRenameOpen) return;
-    const timer = window.setTimeout(() => {
-      if (bulkRenameBaseInputRef.current) {
-        bulkRenameBaseInputRef.current.focus();
-        bulkRenameBaseInputRef.current.select();
-      }
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [bulkRenameOpen]);
   const handleRemoveSelected = async () => {
     if (selectedIds.size === 0) return;
     await handleRemoveImages(Array.from(selectedIds), { label: `${selectedIds.size} selected images` });
@@ -3622,113 +3579,20 @@ export default function App() {
           </div>
         </div>
       ) : null}
-      {bulkRenameOpen ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 px-4">
-          <div
-            ref={bulkRenameDialogRef}
-            onKeyDown={handleBulkRenameDialogKeyDown}
-            tabIndex={-1}
-            className="pointer-events-auto w-full max-w-md rounded-2xl border border-slate-800 bg-slate-950/90 p-6 text-sm text-slate-100 shadow-xl"
-          >
-            <div className="flex items-center justify-between">
-              <div className="text-base font-semibold">Bulk rename {selectedOrderedImages.length} file(s)</div>
-              <button
-                type="button"
-                onClick={() => {
-                  setBulkRenameOpen(false);
-                  setBulkRenameError(null);
-                }}
-                className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-slate-500"
-                data-action="cancel"
-                aria-label="Close bulk rename"
-              >
-                ×
-              </button>
-            </div>
-            <div className="mt-4 space-y-3">
-              <label
-                htmlFor={bulkRenameBaseInputId}
-                className="block text-[11px] uppercase tracking-wide text-slate-400"
-              >
-                Base name
-              </label>
-              <input
-                id={bulkRenameBaseInputId}
-                ref={bulkRenameBaseInputRef}
-                value={bulkRenameBase}
-                onChange={(event) => setBulkRenameBase(event.target.value)}
-                onFocus={(event) => event.currentTarget.select()}
-                placeholder="Enter a new base name"
-                className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-              />
-              <label
-                htmlFor={bulkRenameDigitsInputId}
-                className="block text-[11px] uppercase tracking-wide text-slate-400"
-              >
-                Digits
-              </label>
-              <input
-                id={bulkRenameDigitsInputId}
-                ref={bulkRenameDigitsInputRef}
-                type="number"
-                min={1}
-                value={bulkRenameDigits}
-                onChange={(event) => setBulkRenameDigits(Math.max(1, Number(event.target.value) || 1))}
-                onFocus={(event) => event.currentTarget.select()}
-                className="w-24 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-                title="Number of digits to pad for each file"
-                aria-describedby={bulkRenameDigitsHelperId}
-              />
-              <div className="text-[11px] text-slate-400" id={bulkRenameDigitsHelperId}>
-                Numbers will be padded to {Math.max(1, bulkRenameDigits)} digit(s).
-              </div>
-              {bulkRenameError ? (
-                <div className="rounded-md border border-rose-500/60 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-200">
-                  {bulkRenameError}
-                </div>
-              ) : null}
-              <div className="space-y-2 text-[11px] text-slate-300">
-                <div className="font-semibold text-slate-100">Preview</div>
-                <ul className="space-y-1">
-                  {bulkRenamePreviewEntries.map((entry) => (
-                    <li
-                      key={entry.id}
-                      className="flex items-center justify-between rounded-md bg-slate-900/60 px-3 py-1"
-                    >
-                      <span className="truncate pr-2">{entry.fileName}</span>
-                      <span className="text-slate-400">→ {entry.nextName}</span>
-                    </li>
-                  ))}
-                </ul>
-                {bulkRenameAdditionalCount > 0 ? (
-                  <div className="text-[11px] text-slate-500">And {bulkRenameAdditionalCount} more file(s).</div>
-                ) : null}
-              </div>
-            </div>
-            <div className="mt-6 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setBulkRenameOpen(false);
-                  setBulkRenameError(null);
-                }}
-                className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-300"
-                data-action="cancel"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleBulkRename}
-                disabled={bulkRenaming}
-                className="rounded-md bg-indigo-500 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
-              >
-                {bulkRenaming ? "Renaming…" : "Rename files"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <BulkRenameModal
+        open={bulkRenameOpen}
+        fileCount={selectedOrderedImages.length}
+        baseValue={bulkRenameBase}
+        digitsValue={bulkRenameDigits}
+        renaming={bulkRenaming}
+        error={bulkRenameError}
+        previewEntries={bulkRenamePreviewEntries}
+        additionalCount={bulkRenameAdditionalCount}
+        onBaseChange={handleBulkRenameBaseChange}
+        onDigitsChange={handleBulkRenameDigitsChange}
+        onCancel={handleBulkRenameCancel}
+        onRename={handleBulkRename}
+      />
 
       <div className="flex flex-1 overflow-hidden">
         <aside className="flex w-64 flex-col border-r border-slate-800 bg-slate-950/50 p-4">
