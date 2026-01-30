@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent, MouseEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent } from "react";
 import {
   addCollectionWithImages,
   addImagesToCollection,
@@ -17,6 +17,7 @@ import {
 } from "./lib/db";
 import type { Collection, IndexedImage, IndexedImagePayload } from "./lib/types";
 import { BulkRenameModal } from "./components/BulkRenameModal";
+import { MenuActionBridge } from "./components/MenuActionBridge";
 
 const DEFAULT_ICON_SIZE = 180;
 const GRID_GAP = 16;
@@ -360,42 +361,12 @@ export default function App() {
     handleDuplicateTab: () => { },
     handleCloseOtherTabs: (_tabId: string) => { },
     handleCloseAllTabs: () => { },
-  });
-  const menuActionContextRef = useRef({
-    selectedIds,
-    selectedCollectionIds,
-    images,
-    collections,
-    activeTab,
-    activeCollection,
-    collectionById: new Map<string, Collection>(),
-    handleAddFolder: () => Promise.resolve(),
-    handleRemoveSelected: () => Promise.resolve(),
-    handleRemoveSelectedCollections: () => Promise.resolve(),
-    handleDeleteSelectedCollectionsFromDisk: () => Promise.resolve(),
-    handleDeleteImagesFromDisk: (_ids: string[], _label: string) => Promise.resolve([] as string[]),
-    handleRevealInFolder: (_path?: string) => Promise.resolve(),
-    handleOpenInEditor: (_path?: string) => Promise.resolve(),
-    startRenameImage: (_image: IndexedImage) => { },
-    startRenameCollection: (_collection: Collection) => { },
-    addFavoriteImages: (_ids: string[], _label: string) => Promise.resolve(),
-    removeFavoriteImages: (_ids: string[], _label: string) => Promise.resolve(),
-    addCollectionToFavorites: (_collection: Collection) => Promise.resolve(),
-    removeCollectionFromFavorites: (_collection: Collection) => Promise.resolve(),
-    handleRescanCollections: (_ids: string[]) => Promise.resolve(),
     handleSelectAllImages: () => { },
     handleInvertImageSelection: () => { },
     handleClearImageSelection: () => { },
     handleSelectAllCollections: () => { },
     handleInvertCollectionSelection: () => { },
     handleClearCollectionSelection: () => { },
-    handleCycleTab: (_direction: number) => undefined,
-    handleDuplicateTab: () => undefined,
-    handleCloseTab: (_tabId: string) => undefined,
-    handleCloseOtherTabs: (_tabId: string) => undefined,
-    handleCloseAllTabs: () => undefined,
-    handleOpenBulkRename: () => undefined,
-    setAboutOpen: (_open: boolean) => undefined,
   });
   const removalWorkerRef = useRef<Worker | null>(null);
   const removalRequestsRef = useRef(
@@ -1531,6 +1502,7 @@ export default function App() {
 
   useEffect(() => {
     keyNavContextRef.current = {
+      ...keyNavContextRef.current,
       activeTab,
       selectedIds,
       selectedCollectionIds,
@@ -1668,27 +1640,27 @@ export default function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
         event.preventDefault();
         if (event.shiftKey) {
-          handleSelectAllCollections();
-        } else if (activeTab.type === "library") {
-          handleSelectAllImages();
+          context.handleSelectAllCollections();
+        } else if (context.activeTab.type === "library") {
+          context.handleSelectAllImages();
         }
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "i") {
         event.preventDefault();
         if (event.shiftKey) {
-          handleInvertCollectionSelection();
-        } else if (activeTab.type === "library") {
-          handleInvertImageSelection();
+          context.handleInvertCollectionSelection();
+        } else if (context.activeTab.type === "library") {
+          context.handleInvertImageSelection();
         }
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key === "Backspace") {
         event.preventDefault();
         if (event.shiftKey) {
-          handleClearCollectionSelection();
-        } else if (activeTab.type === "library") {
-          handleClearImageSelection();
+          context.handleClearCollectionSelection();
+        } else if (context.activeTab.type === "library") {
+          context.handleClearImageSelection();
         }
         return;
       }
@@ -2394,7 +2366,7 @@ export default function App() {
   const handleCollectionRowKeyDown = (
     collection: Collection,
     index: number,
-    event: KeyboardEvent<HTMLButtonElement>
+    event: ReactKeyboardEvent<HTMLButtonElement>
   ) => {
     if (event.key !== "Enter" && event.key !== " ") {
       return;
@@ -2480,6 +2452,25 @@ export default function App() {
   const handleClearCollectionSelection = () => {
     setSelectedCollectionIds(new Set());
   };
+
+  useEffect(() => {
+    keyNavContextRef.current = {
+      ...keyNavContextRef.current,
+      handleSelectAllImages,
+      handleInvertImageSelection,
+      handleClearImageSelection,
+      handleSelectAllCollections,
+      handleInvertCollectionSelection,
+      handleClearCollectionSelection,
+    };
+  }, [
+    handleSelectAllImages,
+    handleInvertImageSelection,
+    handleClearImageSelection,
+    handleSelectAllCollections,
+    handleInvertCollectionSelection,
+    handleClearCollectionSelection,
+  ]);
 
   const handleRevealInFolder = async (filePath: string | undefined) => {
     if (!bridgeAvailable || !filePath || !window.comfy?.revealInFolder) return;
@@ -2653,7 +2644,7 @@ export default function App() {
     }
   };
 
-  const handleCollectionListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  const handleCollectionListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const navigationKeys = [
       "ArrowUp",
       "ArrowDown",
@@ -2987,297 +2978,6 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    menuActionContextRef.current = {
-      selectedIds,
-      selectedCollectionIds,
-      images,
-      collections,
-      activeTab,
-      activeCollection,
-      collectionById,
-      handleAddFolder,
-      handleRemoveSelected,
-      handleRemoveSelectedCollections,
-      handleDeleteSelectedCollectionsFromDisk,
-      handleDeleteImagesFromDisk,
-      handleRevealInFolder,
-      handleOpenInEditor,
-      startRenameImage,
-      startRenameCollection,
-      addFavoriteImages,
-      removeFavoriteImages,
-      addCollectionToFavorites,
-      removeCollectionFromFavorites,
-      handleRescanCollections,
-      handleSelectAllImages,
-      handleInvertImageSelection,
-      handleClearImageSelection,
-      handleSelectAllCollections,
-      handleInvertCollectionSelection,
-      handleClearCollectionSelection,
-      handleCycleTab,
-      handleDuplicateTab,
-      handleCloseTab,
-      handleCloseOtherTabs,
-      handleCloseAllTabs,
-      handleOpenBulkRename,
-      setAboutOpen,
-    };
-  }, [
-    selectedIds,
-    selectedCollectionIds,
-    images,
-    collections,
-    activeTab,
-    activeCollection,
-    collectionById,
-    handleAddFolder,
-    handleRemoveSelected,
-    handleRemoveSelectedCollections,
-    handleDeleteSelectedCollectionsFromDisk,
-    handleDeleteImagesFromDisk,
-    handleRevealInFolder,
-    handleOpenInEditor,
-    startRenameImage,
-    startRenameCollection,
-    addFavoriteImages,
-    removeFavoriteImages,
-    addCollectionToFavorites,
-    removeCollectionFromFavorites,
-    handleRescanCollections,
-    handleSelectAllImages,
-    handleInvertImageSelection,
-    handleClearImageSelection,
-    handleSelectAllCollections,
-    handleInvertCollectionSelection,
-    handleClearCollectionSelection,
-    handleCycleTab,
-    handleDuplicateTab,
-    handleCloseTab,
-    handleCloseOtherTabs,
-    handleCloseAllTabs,
-    handleOpenBulkRename,
-    setAboutOpen,
-  ]);
-
-  useEffect(() => {
-    if (!bridgeAvailable || !window.comfy?.onMenuAction) return;
-    return window.comfy.onMenuAction((action) => {
-      const context = menuActionContextRef.current;
-      const firstSelectedId = context.selectedIds.values().next().value as string | undefined;
-      const fallbackImage =
-        context.activeTab.type === "image"
-          ? context.activeTab.image
-          : firstSelectedId
-            ? context.images.find((image) => image.id === firstSelectedId)
-            : undefined;
-      if (action === "add-folder") {
-        void context.handleAddFolder();
-        return;
-      }
-      if (action === "remove-selected-images") {
-        void context.handleRemoveSelected();
-        return;
-      }
-      if (action === "remove-selected-collections") {
-        void context.handleRemoveSelectedCollections();
-        return;
-      }
-      if (action === "rescan-selected-collections") {
-        void context.handleRescanCollections(Array.from(context.selectedCollectionIds));
-        return;
-      }
-      if (action === "select-all-images") {
-        context.handleSelectAllImages();
-        return;
-      }
-      if (action === "invert-image-selection") {
-        context.handleInvertImageSelection();
-        return;
-      }
-      if (action === "clear-image-selection") {
-        context.handleClearImageSelection();
-        return;
-      }
-      if (action === "select-all-collections") {
-        context.handleSelectAllCollections();
-        return;
-      }
-      if (action === "invert-collection-selection") {
-        context.handleInvertCollectionSelection();
-        return;
-      }
-      if (action === "clear-collection-selection") {
-        context.handleClearCollectionSelection();
-        return;
-      }
-      if (action === "delete-selected-images-disk") {
-        const ids = Array.from(context.selectedIds);
-        void context.handleDeleteImagesFromDisk(ids, `${ids.length} selected images`);
-        return;
-      }
-      if (action === "delete-selected-collections-disk") {
-        void context.handleDeleteSelectedCollectionsFromDisk();
-        return;
-      }
-      if (action === "add-selected-images-favorites") {
-        const ids = Array.from(context.selectedIds);
-        void context.addFavoriteImages(ids, `${ids.length} image(s) added to favourites`);
-        return;
-      }
-      if (action === "remove-selected-images-favorites") {
-        const ids = Array.from(context.selectedIds);
-        void context.removeFavoriteImages(ids, `${ids.length} image(s) removed from favourites`);
-        return;
-      }
-      if (action === "add-selected-collections-favorites") {
-        void (async () => {
-          for (const id of context.selectedCollectionIds) {
-            const targetCollection = context.collections.find((entry) => entry.id === id);
-            if (targetCollection) {
-              await context.addCollectionToFavorites(targetCollection);
-            }
-          }
-        })();
-        return;
-      }
-      if (action === "remove-selected-collections-favorites") {
-        void (async () => {
-          for (const id of context.selectedCollectionIds) {
-            const targetCollection = context.collections.find((entry) => entry.id === id);
-            if (targetCollection) {
-              await context.removeCollectionFromFavorites(targetCollection);
-            }
-          }
-        })();
-        return;
-      }
-      if (action === "rename-selected-image") {
-        const target =
-          context.activeTab.type === "image"
-            ? context.activeTab.image
-            : context.selectedIds.size === 1
-              ? context.images.find((image) => context.selectedIds.has(image.id))
-              : null;
-        if (target) {
-          context.startRenameImage(target);
-        }
-        return;
-      }
-      if (action === "bulk-rename-selected-images") {
-        context.handleOpenBulkRename();
-        return;
-      }
-      if (action === "rename-selected-collection") {
-        const target =
-          context.selectedCollectionIds.size === 1
-            ? context.collections.find((collection) => context.selectedCollectionIds.has(collection.id))
-            : context.activeCollection !== "all"
-              ? context.collectionById.get(context.activeCollection) ?? null
-              : null;
-        if (target) {
-          context.startRenameCollection(target);
-        }
-        return;
-      }
-      if (action === "reveal-active-image") {
-        void context.handleRevealInFolder(fallbackImage?.filePath);
-        return;
-      }
-      if (action === "edit-active-image") {
-        void context.handleOpenInEditor(fallbackImage?.filePath);
-        return;
-      }
-      if (action === "reveal-active-collection") {
-        const targetCollection =
-          context.activeTab.type === "image" ? context.activeTab.image.collectionId : context.activeCollection;
-        const collection = targetCollection === "all" ? null : context.collectionById.get(targetCollection);
-        void context.handleRevealInFolder(collection?.rootPath);
-        return;
-      }
-      if (action === "tab-next") {
-        context.handleCycleTab(1);
-        return;
-      }
-      if (action === "tab-prev") {
-        context.handleCycleTab(-1);
-        return;
-      }
-      if (action === "tab-duplicate") {
-        context.handleDuplicateTab();
-        return;
-      }
-      if (action === "tab-close") {
-        if (context.activeTab.id !== "library") {
-          context.handleCloseTab(context.activeTab.id);
-        }
-        return;
-      }
-      if (action === "tab-close-others") {
-        context.handleCloseOtherTabs(context.activeTab.id);
-        return;
-      }
-      if (action === "tab-close-all") {
-        context.handleCloseAllTabs();
-        return;
-      }
-      if (action === "show-about") {
-        context.setAboutOpen(true);
-        return;
-      }
-    });
-  }, [bridgeAvailable]);
-
-  useEffect(() => {
-    if (!bridgeAvailable || !window.comfy?.updateMenuState) return;
-    const firstSelectedId = selectedIds.values().next().value as string | undefined;
-    const activeImage =
-      activeTab.type === "image"
-        ? activeTab.image
-        : firstSelectedId
-          ? imageById.get(firstSelectedId)
-          : undefined;
-    const hasActiveImage = Boolean(activeImage);
-    const collectionTargetId =
-      activeTab.type === "image" ? activeTab.image.collectionId : activeCollection;
-    const hasActiveCollection =
-      collectionTargetId !== "all" &&
-      collectionTargetId !== FAVORITES_ID &&
-      Boolean(collectionById.get(collectionTargetId));
-    const isLibraryTab = activeTab.type === "library";
-    window.comfy.updateMenuState({
-      hasActiveImage,
-      hasActiveCollection,
-      hasSelectedImages: isLibraryTab && selectedIds.size > 0,
-      hasSelectedCollections: selectedCollectionIds.size > 0,
-      hasSingleSelectedImage: activeTab.type === "image" || (isLibraryTab && selectedIds.size === 1),
-      hasSingleSelectedCollection:
-        selectedCollectionIds.size === 1 ||
-        (activeCollection !== "all" && activeCollection !== FAVORITES_ID && selectedCollectionIds.size === 0),
-      hasImages: isLibraryTab && filteredImages.length > 0,
-      hasCollections: collections.length > 0,
-      canBulkRenameImages: selectedOrderedImages.length > 0,
-      isIndexing,
-      isRemoving: !!(removalCollectionProgress || removalImageProgress),
-      isDeleting: isDeletingFiles,
-    });
-  }, [
-    bridgeAvailable,
-    activeTab,
-    activeCollection,
-    filteredImages,
-    collections,
-    selectedIds,
-    selectedCollectionIds,
-    collectionById,
-    imageById,
-    isIndexing,
-    removalCollectionProgress,
-    removalImageProgress,
-    isDeletingFiles,
-    selectedOrderedImages,
-  ]);
 
   const activeTabContent = useMemo(() => {
     if (activeTab.type === "library") return null;
@@ -3579,6 +3279,53 @@ export default function App() {
           </div>
         </div>
       ) : null}
+      <MenuActionBridge
+        bridgeAvailable={bridgeAvailable}
+        favoritesId={FAVORITES_ID}
+        selectedIds={selectedIds}
+        selectedCollectionIds={selectedCollectionIds}
+        images={images}
+        collections={collections}
+        activeTabId={activeTab.id}
+        activeTabType={activeTab.type}
+        activeTabImage={activeTab.type === "image" ? activeTab.image : null}
+        activeCollection={activeCollection}
+        collectionById={collectionById}
+        imageById={imageById}
+        filteredImages={filteredImages}
+        selectedOrderedImages={selectedOrderedImages}
+        isIndexing={isIndexing}
+        removalCollectionProgress={removalCollectionProgress}
+        removalImageProgress={removalImageProgress}
+        isDeletingFiles={isDeletingFiles}
+        handleAddFolder={handleAddFolder}
+        handleRemoveSelected={handleRemoveSelected}
+        handleRemoveSelectedCollections={handleRemoveSelectedCollections}
+        handleDeleteSelectedCollectionsFromDisk={handleDeleteSelectedCollectionsFromDisk}
+        handleDeleteImagesFromDisk={handleDeleteImagesFromDisk}
+        handleRevealInFolder={handleRevealInFolder}
+        handleOpenInEditor={handleOpenInEditor}
+        startRenameImage={startRenameImage}
+        startRenameCollection={startRenameCollection}
+        addFavoriteImages={addFavoriteImages}
+        removeFavoriteImages={removeFavoriteImages}
+        addCollectionToFavorites={addCollectionToFavorites}
+        removeCollectionFromFavorites={removeCollectionFromFavorites}
+        handleRescanCollections={handleRescanCollections}
+        handleSelectAllImages={handleSelectAllImages}
+        handleInvertImageSelection={handleInvertImageSelection}
+        handleClearImageSelection={handleClearImageSelection}
+        handleSelectAllCollections={handleSelectAllCollections}
+        handleInvertCollectionSelection={handleInvertCollectionSelection}
+        handleClearCollectionSelection={handleClearCollectionSelection}
+        handleCycleTab={handleCycleTab}
+        handleDuplicateTab={handleDuplicateTab}
+        handleCloseTab={handleCloseTab}
+        handleCloseOtherTabs={handleCloseOtherTabs}
+        handleCloseAllTabs={handleCloseAllTabs}
+        handleOpenBulkRename={handleOpenBulkRename}
+        setAboutOpen={setAboutOpen}
+      />
       <BulkRenameModal
         open={bulkRenameOpen}
         fileCount={selectedOrderedImages.length}
