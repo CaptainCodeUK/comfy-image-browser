@@ -32,6 +32,7 @@ declare global {
         | "reveal-image"
         | "edit-image"
         | "rename-image"
+        | "bulk-rename-selected-images"
         | "reveal-collection"
         | "rescan-collection"
         | "rename-collection"
@@ -67,6 +68,7 @@ declare global {
         hasSingleSelectedCollection: boolean;
         hasImages: boolean;
         hasCollections: boolean;
+        canBulkRenameImages: boolean;
         isIndexing: boolean;
         isRemoving: boolean;
         isDeleting: boolean;
@@ -89,6 +91,7 @@ declare global {
             | "add-selected-collections-favorites"
             | "remove-selected-collections-favorites"
             | "rescan-selected-collections"
+            | "bulk-rename-selected-images"
             | "select-all-images"
             | "invert-image-selection"
             | "clear-image-selection"

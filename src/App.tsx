@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";
 import {
   addCollectionWithImages,
@@ -285,6 +285,14 @@ export default function App() {
   const [cancelingIndex, setCancelingIndex] = useState(false);
   const [gridMetrics, setGridMetrics] = useState({ width: 0, height: 0, scrollTop: 0 });
   const gridRef = useRef<HTMLDivElement | null>(null);
+  const gridInnerRef = useRef<HTMLDivElement | null>(null);
+  const assignVirtualPosition = (node: HTMLElement | null, top: number, left: number, width: number, height: number) => {
+    if (!node) return;
+    node.style.top = `${top}px`;
+    node.style.left = `${left}px`;
+    node.style.width = `${width}px`;
+    node.style.height = `${height}px`;
+  };
   const [thumbnailMap, setThumbnailMap] = useState<Record<string, string>>({});
   const [loadedThumbs, setLoadedThumbs] = useState<Set<string>>(new Set());
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
@@ -293,6 +301,14 @@ export default function App() {
   const [renameState, setRenameState] = useState<RenameState>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [appInfo, setAppInfo] = useState<{ name: string; version: string } | null>(null);
+  const [bulkRenameOpen, setBulkRenameOpen] = useState(false);
+  const [bulkRenameBase, setBulkRenameBase] = useState("");
+  const [bulkRenameDigits, setBulkRenameDigits] = useState(3);
+  const [bulkRenaming, setBulkRenaming] = useState(false);
+  const [bulkRenameError, setBulkRenameError] = useState<string | null>(null);
+  const bulkRenameBaseInputId = useId();
+  const bulkRenameDigitsInputId = useId();
+  const bulkRenameDigitsHelperId = useId();
   const [metadataSummary, setMetadataSummary] = useState<ReturnType<typeof extractMetadataSummary> | null>(null);
   const [isImageLoading, setIsImageLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -391,6 +407,55 @@ export default function App() {
   );
 
   const yieldToPaint = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+  const getPathSeparator = (value: string) => (value.includes("\\") ? "\\" : "/");
+  const ensureTrailingSeparator = (value: string) =>
+    value.endsWith("/") || value.endsWith("\\") ? value : `${value}${getPathSeparator(value)}`;
+  const isPathWithinRoot = (candidate: string, root: string) =>
+    candidate === root || candidate.startsWith(ensureTrailingSeparator(root));
+  const getParentPath = (value: string) => {
+    const separator = getPathSeparator(value);
+    const parts = value.split(/[/\\\\]/).filter((segment) => segment.length > 0);
+    if (parts.length <= 1) {
+      return value;
+    }
+    const parent = parts.slice(0, -1).join(separator);
+    if (value.startsWith(separator)) {
+      return `${separator}${parent}`;
+    }
+    if (/^[A-Za-z]:/.test(value)) {
+      return `${parts[0]}${separator}${parts.slice(1, -1).join(separator)}`;
+    }
+    return parent;
+  };
+  const joinPath = (base: string, next: string) => `${ensureTrailingSeparator(base)}${next}`;
+  const getFileExtension = (name: string) => {
+    const index = name.lastIndexOf(".");
+    if (index <= 0) return "";
+    return name.slice(index);
+  };
+  const deriveBulkRenameBase = (image?: IndexedImage) => {
+    if (!image) return "image-";
+    const extension = getFileExtension(image.fileName);
+    const withoutExtension = image.fileName.slice(0, image.fileName.length - extension.length);
+    const trimmed = withoutExtension.replace(/\d+$/g, "");
+    return trimmed || "image-";
+  };
+  const formatBulkRenameName = (image: IndexedImage, base: string, digits: number, index: number) => {
+    const extension = getFileExtension(image.fileName);
+    const padded = String(index + 1).padStart(Math.max(1, digits), "0");
+    return `${base}${padded}${extension}`;
+  };
+  const calculateBulkRenameDigits = (totalFiles: number) => {
+    const normalized = Math.max(1, totalFiles);
+    return Math.max(1, String(normalized).length + 1);
+  };
+  const formatIndexSummary = (label: string, collectionsAdded: number, imagesAdded: number, cancelled: boolean) => {
+    const status = cancelled ? `${label} canceled` : `${label} complete`;
+    const collectionLabel = collectionsAdded === 1 ? "collection" : "collections";
+    const imageLabel = imagesAdded === 1 ? "image" : "images";
+    return `${status} — added ${collectionsAdded} ${collectionLabel}, ${imagesAdded} ${imageLabel}`;
+  };
 
   const runRemovalWorker = useCallback(
     (
@@ -826,6 +891,46 @@ export default function App() {
       .filter((image): image is IndexedImage => Boolean(image));
   }, [selectedIds, filteredIndexById, imageById]);
 
+  const selectedOrderedImageIds = useMemo(
+    () => filteredImageIds.filter((id) => selectedIds.has(id)),
+    [filteredImageIds, selectedIds]
+  );
+  const selectedOrderedImages = useMemo(
+    () =>
+      selectedOrderedImageIds
+        .map((id) => imageById.get(id))
+        .filter((image): image is IndexedImage => Boolean(image))
+    ,
+    [selectedOrderedImageIds, imageById]
+  );
+  const bulkRenamePreviewEntries = useMemo(() => {
+    const previewIndexes = new Set<number>();
+    const total = selectedOrderedImages.length;
+    if (total === 0) return [];
+    for (let index = 0; index < Math.min(2, total); index += 1) {
+      previewIndexes.add(index);
+    }
+    for (let index = Math.max(0, total - 2); index < total; index += 1) {
+      previewIndexes.add(index);
+    }
+    const base = bulkRenameBase.length > 0 ? bulkRenameBase : deriveBulkRenameBase(selectedOrderedImages[0]);
+    const digits = Math.max(1, bulkRenameDigits);
+    return Array.from(previewIndexes)
+      .sort((a, b) => a - b)
+      .map((index) => {
+        const image = selectedOrderedImages[index];
+        return image
+          ? {
+              id: image.id,
+              fileName: image.fileName,
+              nextName: formatBulkRenameName(image, base, digits, index),
+            }
+          : null;
+      })
+      .filter((entry): entry is { id: string; fileName: string; nextName: string } => Boolean(entry));
+  }, [selectedOrderedImages, bulkRenameBase, bulkRenameDigits, deriveBulkRenameBase]);
+  const bulkRenameAdditionalCount = Math.max(0, selectedOrderedImages.length - bulkRenamePreviewEntries.length);
+
   const collectionIdForNav =
     activeTab.type === "image"
       ? activeCollection === FAVORITES_ID && favoriteIds.has(activeTab.image.id)
@@ -848,6 +953,11 @@ export default function App() {
     Math.max(0, startIndex - filteredWindowStart),
     Math.max(0, endIndex - filteredWindowStart)
   );
+  useLayoutEffect(() => {
+    if (gridInnerRef.current) {
+      gridInnerRef.current.style.height = `${totalRows * rowHeight}px`;
+    }
+  }, [rowHeight, totalRows]);
 
   const getRangeIds = useCallback(
     (start: number, end: number) => {
@@ -1980,6 +2090,113 @@ export default function App() {
     setRenameState(null);
   }
 
+  const handleOpenBulkRename = useCallback(() => {
+    if (selectedOrderedImages.length === 0) return;
+    setBulkRenameError(null);
+  setBulkRenameDigits(calculateBulkRenameDigits(selectedOrderedImages.length));
+    setBulkRenameBase(deriveBulkRenameBase(selectedOrderedImages[0]));
+    setBulkRenameOpen(true);
+  }, [deriveBulkRenameBase, selectedOrderedImages]);
+
+  const handleBulkRename = useCallback(async () => {
+    if (!window.comfy?.renamePath) {
+      setBulkRenameError("Bridge unavailable");
+      return;
+    }
+    if (selectedOrderedImages.length === 0) return;
+    if (!bulkRenameBase.length) {
+      setBulkRenameError("Enter a base name");
+      return;
+    }
+    if (bulkRenameBase.includes("/") || bulkRenameBase.includes("\\")) {
+      setBulkRenameError("Name cannot include path separators");
+      return;
+    }
+    const baseName = bulkRenameBase;
+    const digits = Math.max(1, bulkRenameDigits);
+    setBulkRenaming(true);
+    setBulkRenameError(null);
+    try {
+      const renameResults: Array<{ id: string; fileName: string; filePath: string }> = [];
+      for (let index = 0; index < selectedOrderedImages.length; index += 1) {
+        const image = selectedOrderedImages[index];
+        const nextName = formatBulkRenameName(image, baseName, digits, index);
+        if (nextName === image.fileName) {
+          renameResults.push({ id: image.id, fileName: image.fileName, filePath: image.filePath });
+          continue;
+        }
+        const parentPath = getParentPath(image.filePath);
+        const newPath = joinPath(parentPath, nextName);
+        const result = await window.comfy.renamePath({ oldPath: image.filePath, newPath, kind: "file" });
+        if (!result?.success) {
+          const message = result?.message ?? "Failed to rename files";
+          setBulkRenameError(message);
+          setToastMessage(message);
+          setLastCopied(message);
+          return;
+        }
+        await updateImageFileInfo(image.id, newPath, nextName);
+        renameResults.push({ id: image.id, fileName: nextName, filePath: newPath });
+      }
+      if (renameResults.length === 0) {
+        setToastMessage("No files were renamed");
+        setLastCopied("No files were renamed");
+        return;
+      }
+      const renameMap = new Map(renameResults.map((entry) => [entry.id, entry]));
+      setImages((prev) =>
+        prev.map((image) => {
+          const update = renameMap.get(image.id);
+          if (!update) return image;
+          return { ...image, fileName: update.fileName, filePath: update.filePath, fileUrl: update.filePath };
+        })
+      );
+      setTabs((prev) =>
+        prev.map((tab) => {
+          if (tab.type !== "image") return tab;
+          const update = renameMap.get(tab.image.id);
+          if (!update) return tab;
+          return {
+            ...tab,
+            title: update.fileName,
+            image: { ...tab.image, fileName: update.fileName, filePath: update.filePath, fileUrl: update.filePath },
+          };
+        })
+      );
+      setActiveTab((current) => {
+        if (current.type !== "image") return current;
+        const update = renameMap.get(current.image.id);
+        if (!update) return current;
+        return {
+          ...current,
+          title: update.fileName,
+          image: { ...current.image, fileName: update.fileName, filePath: update.filePath, fileUrl: update.filePath },
+        };
+      });
+      const renamedIds = renameResults.map((entry) => entry.id);
+      removeThumbnailEntries(renamedIds);
+      hydrateFileUrls(
+        renameResults.map((entry) => ({
+          id: entry.id,
+          fileName: entry.fileName,
+          filePath: entry.filePath,
+          fileUrl: entry.filePath,
+        }))
+      );
+      const successMessage = `Renamed ${renameResults.length} image${renameResults.length === 1 ? "" : "s"}`;
+      setToastMessage(successMessage);
+      setLastCopied(successMessage);
+      setBulkRenameOpen(false);
+    } finally {
+      setBulkRenaming(false);
+    }
+  }, [bulkRenameBase, bulkRenameDigits, hydrateFileUrls, removeThumbnailEntries, selectedOrderedImages, setToastMessage, setLastCopied]);
+
+  useEffect(() => {
+    if (bulkRenameOpen && selectedOrderedImages.length === 0) {
+      setBulkRenameOpen(false);
+    }
+  }, [bulkRenameOpen, selectedOrderedImages.length]);
   const handleRemoveSelected = async () => {
     if (selectedIds.size === 0) return;
     await handleRemoveImages(Array.from(selectedIds), { label: `${selectedIds.size} selected images` });
@@ -2367,6 +2584,9 @@ export default function App() {
     if (action === "clear-image-selection") {
       handleClearImageSelection();
     }
+    if (action === "bulk-rename-selected-images") {
+      handleOpenBulkRename();
+    }
   };
 
   const handleCollectionContextMenu = async (event: React.MouseEvent, collection: Collection) => {
@@ -2514,39 +2734,6 @@ export default function App() {
     setSelectedCollectionIds(new Set([nextId]));
     setCollectionSelectionAnchor(nextIndex);
     setActiveCollection(nextId);
-  };
-
-  const getPathSeparator = (value: string) => (value.includes("\\") ? "\\" : "/");
-  const ensureTrailingSeparator = (value: string) =>
-    value.endsWith("/") || value.endsWith("\\") ? value : `${value}${getPathSeparator(value)}`;
-  const isPathWithinRoot = (candidate: string, root: string) =>
-    candidate === root || candidate.startsWith(ensureTrailingSeparator(root));
-  const getParentPath = (value: string) => {
-    const separator = getPathSeparator(value);
-    const parts = value.split(/[/\\]/).filter((segment) => segment.length > 0);
-    if (parts.length <= 1) {
-      return value;
-    }
-    const parent = parts.slice(0, -1).join(separator);
-    if (value.startsWith(separator)) {
-      return `${separator}${parent}`;
-    }
-    if (/^[A-Za-z]:/.test(value)) {
-      return `${parts[0]}${separator}${parts.slice(1, -1).join(separator)}`;
-    }
-    return parent;
-  };
-  const joinPath = (base: string, next: string) => `${ensureTrailingSeparator(base)}${next}`;
-  const getFileExtension = (name: string) => {
-    const index = name.lastIndexOf(".");
-    if (index <= 0) return "";
-    return name.slice(index);
-  };
-  const formatIndexSummary = (label: string, collectionsAdded: number, imagesAdded: number, cancelled: boolean) => {
-    const status = cancelled ? `${label} canceled` : `${label} complete`;
-    const collectionLabel = collectionsAdded === 1 ? "collection" : "collections";
-    const imageLabel = imagesAdded === 1 ? "image" : "images";
-    return `${status} — added ${collectionsAdded} ${collectionLabel}, ${imagesAdded} ${imageLabel}`;
   };
 
   const handleRescanCollections = async (collectionIds: string[]) => {
@@ -2824,6 +3011,7 @@ export default function App() {
       handleCloseTab,
       handleCloseOtherTabs,
       handleCloseAllTabs,
+      handleOpenBulkRename,
       setAboutOpen,
     };
   }, [
@@ -2859,6 +3047,7 @@ export default function App() {
     handleCloseTab,
     handleCloseOtherTabs,
     handleCloseAllTabs,
+    handleOpenBulkRename,
     setAboutOpen,
   ]);
 
@@ -2966,6 +3155,10 @@ export default function App() {
         }
         return;
       }
+      if (action === "bulk-rename-selected-images") {
+        context.handleOpenBulkRename();
+        return;
+      }
       if (action === "rename-selected-collection") {
         const target =
           context.selectedCollectionIds.size === 1
@@ -3054,6 +3247,7 @@ export default function App() {
         (activeCollection !== "all" && activeCollection !== FAVORITES_ID && selectedCollectionIds.size === 0),
       hasImages: isLibraryTab && filteredImages.length > 0,
       hasCollections: collections.length > 0,
+        canBulkRenameImages: selectedOrderedImages.length > 0,
       isIndexing,
       isRemoving: !!(removalCollectionProgress || removalImageProgress),
       isDeleting: isDeletingFiles,
@@ -3072,6 +3266,7 @@ export default function App() {
     removalCollectionProgress,
     removalImageProgress,
     isDeletingFiles,
+    selectedOrderedImages,
   ]);
 
   const activeTabContent = useMemo(() => {
@@ -3375,6 +3570,101 @@ export default function App() {
           </div>
         </div>
       ) : null}
+      {bulkRenameOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 px-4">
+          <div className="pointer-events-auto w-full max-w-md rounded-2xl border border-slate-800 bg-slate-950/90 p-6 text-sm text-slate-100 shadow-xl">
+            <div className="flex items-center justify-between">
+              <div className="text-base font-semibold">Bulk rename {selectedOrderedImages.length} file(s)</div>
+              <button
+                type="button"
+                onClick={() => {
+                  setBulkRenameOpen(false);
+                  setBulkRenameError(null);
+                }}
+                className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-slate-500"
+              >
+                Close
+              </button>
+            </div>
+            <div className="mt-4 space-y-3">
+              <label
+                htmlFor={bulkRenameBaseInputId}
+                className="block text-[11px] uppercase tracking-wide text-slate-400"
+              >
+                Base name
+              </label>
+              <input
+                id={bulkRenameBaseInputId}
+                value={bulkRenameBase}
+                onChange={(event) => setBulkRenameBase(event.target.value)}
+                placeholder="Enter a new base name"
+                className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+              />
+              <label
+                htmlFor={bulkRenameDigitsInputId}
+                className="block text-[11px] uppercase tracking-wide text-slate-400"
+              >
+                Digits
+              </label>
+              <input
+                id={bulkRenameDigitsInputId}
+                type="number"
+                min={1}
+                value={bulkRenameDigits}
+                onChange={(event) => setBulkRenameDigits(Math.max(1, Number(event.target.value) || 1))}
+                className="w-24 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                title="Number of digits to pad for each file"
+                aria-describedby={bulkRenameDigitsHelperId}
+              />
+              <div className="text-[11px] text-slate-400" id={bulkRenameDigitsHelperId}>
+                Numbers will be padded to {Math.max(1, bulkRenameDigits)} digit(s).
+              </div>
+              {bulkRenameError ? (
+                <div className="rounded-md border border-rose-500/60 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-200">
+                  {bulkRenameError}
+                </div>
+              ) : null}
+              <div className="space-y-2 text-[11px] text-slate-300">
+                <div className="font-semibold text-slate-100">Preview</div>
+                <ul className="space-y-1">
+                  {bulkRenamePreviewEntries.map((entry) => (
+                    <li
+                      key={entry.id}
+                      className="flex items-center justify-between rounded-md bg-slate-900/60 px-3 py-1"
+                    >
+                      <span className="truncate pr-2">{entry.fileName}</span>
+                      <span className="text-slate-400">→ {entry.nextName}</span>
+                    </li>
+                  ))}
+                </ul>
+                {bulkRenameAdditionalCount > 0 ? (
+                  <div className="text-[11px] text-slate-500">And {bulkRenameAdditionalCount} more file(s).</div>
+                ) : null}
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setBulkRenameOpen(false);
+                  setBulkRenameError(null);
+                }}
+                className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkRename}
+                disabled={bulkRenaming}
+                className="rounded-md bg-indigo-500 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
+              >
+                {bulkRenaming ? "Renaming…" : "Rename files"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-1 overflow-hidden">
         <aside className="flex w-64 flex-col border-r border-slate-800 bg-slate-950/50 p-4">
@@ -3672,6 +3962,14 @@ export default function App() {
             >
               Open selected
             </button>
+            <button
+              type="button"
+              onClick={handleOpenBulkRename}
+              disabled={selectedOrderedImages.length === 0}
+              className="rounded-md border border-slate-700 px-3 py-2 text-xs text-slate-300 disabled:opacity-40"
+            >
+              Bulk rename
+            </button>
             <div className="flex items-center gap-2 text-xs text-slate-400">
               <span>Icon size</span>
               <input
@@ -3818,14 +4116,14 @@ export default function App() {
                 }}
                 className="h-full overflow-auto p-4 scrollbar-thin"
               >
-                {/* eslint-disable-next-line react/forbid-dom-props */}
-                <div className="relative" style={{ height: totalRows * rowHeight }}>
+                <div className="relative" ref={gridInnerRef}>
                   {visibleImages.map((image, index) => {
                     const absoluteIndex = startIndex + index;
                     const row = Math.floor(absoluteIndex / gridColumnCount);
                     const col = absoluteIndex % gridColumnCount;
                     const top = row * rowHeight;
                     const left = col * (iconSize + GRID_GAP);
+                    const height = rowHeight - GRID_GAP;
                     const isSelected = selectedIds.has(image.id);
                     const thumbUrl = thumbnailMap[image.id] ?? (image.fileUrl === image.filePath ? toComfyUrl(image.filePath) : image.fileUrl);
                     const isLoaded = loadedThumbs.has(image.id);
@@ -3837,11 +4135,12 @@ export default function App() {
                       return (
                         <div
                           key={image.id}
+                          ref={(node) =>
+                            assignVirtualPosition(node, top, left, iconSize, height)
+                          }
                           className={`absolute rounded-xl border p-2 text-left ${
                             isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800"
                           } ${absoluteIndex === focusedIndex ? "ring-2 ring-indigo-400" : ""}`}
-                          /* eslint-disable-next-line react/forbid-dom-props */
-                          style={{ top, left, width: iconSize, height: rowHeight - GRID_GAP }}
                         >
                           <div className="relative aspect-square overflow-hidden rounded-lg bg-slate-950 p-1">
                             {!isLoaded ? (
@@ -3923,11 +4222,10 @@ export default function App() {
                         onDoubleClick={() => {
                           void handleOpenImages([image]);
                         }}
+                        ref={(node) => assignVirtualPosition(node, top, left, iconSize, height)}
                         className={`absolute rounded-xl border p-2 text-left ${
                           isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800 hover:border-slate-600"
                         } ${absoluteIndex === focusedIndex ? "ring-2 ring-indigo-400" : ""}`}
-                        /* eslint-disable-next-line react/forbid-dom-props */
-                        style={{ top, left, width: iconSize, height: rowHeight - GRID_GAP }}
                       >
                         <div className="relative aspect-square overflow-hidden rounded-lg bg-slate-950 p-1">
                           {!isLoaded ? (

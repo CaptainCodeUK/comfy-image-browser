@@ -299,6 +299,12 @@ const buildAppMenu = () => {
                 click: () => sendMenuAction("rename-selected-image"),
             },
             {
+                id: "menu-bulk-rename-selected-images",
+                label: "Bulk Rename Selected Images…",
+                enabled: false,
+                click: () => sendMenuAction("bulk-rename-selected-images"),
+            },
+            {
                 id: "menu-add-selected-images-favorites",
                 label: "Add Selected Images to Favourites",
                 enabled: false,
@@ -932,6 +938,7 @@ ipcMain.on(
             hasSingleSelectedCollection: boolean;
             hasImages: boolean;
             hasCollections: boolean;
+            canBulkRenameImages: boolean;
             isIndexing: boolean;
             isRemoving: boolean;
             isDeleting: boolean;
@@ -955,6 +962,20 @@ ipcMain.on(
         updateMenuItemEnabled("menu-select-all-collections", state.hasCollections);
         updateMenuItemEnabled("menu-invert-collection-selection", state.hasCollections);
         updateMenuItemEnabled("menu-clear-collection-selection", state.hasSelectedCollections);
+        updateMenuItemEnabled("menu-reveal-active-image", state.hasActiveImage);
+        updateMenuItemEnabled("menu-edit-active-image", state.hasActiveImage);
+        updateMenuItemEnabled("menu-rename-selected-image", state.hasSingleSelectedImage);
+        updateMenuItemEnabled(
+            "menu-bulk-rename-selected-images",
+            state.canBulkRenameImages && !removalLocked
+        );
+        updateMenuItemEnabled("menu-add-selected-images-favorites", state.hasSelectedImages);
+        updateMenuItemEnabled("menu-remove-selected-images-favorites", state.hasSelectedImages);
+        updateMenuItemEnabled("menu-remove-selected-images", state.hasSelectedImages && !removalLocked);
+        updateMenuItemEnabled("menu-delete-selected-images-disk", state.hasSelectedImages && !removalLocked);
+        updateMenuItemEnabled("menu-select-all-images", state.hasImages);
+        updateMenuItemEnabled("menu-invert-image-selection", state.hasImages);
+        updateMenuItemEnabled("menu-clear-image-selection", state.hasSelectedImages);
     }
 );
 
@@ -1059,6 +1080,13 @@ ipcMain.handle(
                     items.push({
                         label: "Rename Image…",
                         click: () => finish("rename-image"),
+                    });
+                }
+                if (payload.selectedCount >= 1) {
+                    const countLabel = payload.selectedCount > 1 ? ` (${payload.selectedCount})` : "";
+                    items.push({
+                        label: `Bulk rename selected images${countLabel}…`,
+                        click: () => finish("bulk-rename-selected-images"),
                     });
                 }
                 if (payload.selectedCount >= 1) {
