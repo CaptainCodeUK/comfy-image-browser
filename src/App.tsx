@@ -185,8 +185,8 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
     }
     if (typeof value === "object") {
       const record = value as Record<string, MetadataValue>;
-  const strengthModel = typeof record.strength_model === "number" ? record.strength_model : undefined;
-  const strengthClip = typeof record.strength_clip === "number" ? record.strength_clip : undefined;
+      const strengthModel = typeof record.strength_model === "number" ? record.strength_model : undefined;
+      const strengthClip = typeof record.strength_clip === "number" ? record.strength_clip : undefined;
       const strength = strengthModel ?? strengthClip;
       Object.entries(record).forEach(([key, entry]) => {
         if (key === "lora_name" || key === "lora" || key === "loraName") {
@@ -309,6 +309,9 @@ export default function App() {
   const bulkRenameBaseInputId = useId();
   const bulkRenameDigitsInputId = useId();
   const bulkRenameDigitsHelperId = useId();
+  const bulkRenameBaseInputRef = useRef<HTMLInputElement | null>(null);
+  const bulkRenameDigitsInputRef = useRef<HTMLInputElement | null>(null);
+  const bulkRenameDialogRef = useRef<HTMLDivElement | null>(null);
   const [metadataSummary, setMetadataSummary] = useState<ReturnType<typeof extractMetadataSummary> | null>(null);
   const [isImageLoading, setIsImageLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -343,15 +346,15 @@ export default function App() {
     navigationImageIds: [] as string[],
     imageById: new Map<string, IndexedImage>(),
     getRangeIds: (_start: number, _end: number) => new Set<string>(),
-    startRenameImage: (_image: IndexedImage) => {},
-    startRenameCollection: (_collection: Collection) => {},
+    startRenameImage: (_image: IndexedImage) => { },
+    startRenameCollection: (_collection: Collection) => { },
     toggleFavoriteImage: (_image: IndexedImage) => Promise.resolve(),
     handleOpenImages: (_images: IndexedImage[]) => Promise.resolve(),
     handleNavigateImage: (_image: IndexedImage) => Promise.resolve(),
-    handleCloseTab: (_tabId: string) => {},
-    handleDuplicateTab: () => {},
-    handleCloseOtherTabs: (_tabId: string) => {},
-    handleCloseAllTabs: () => {},
+    handleCloseTab: (_tabId: string) => { },
+    handleDuplicateTab: () => { },
+    handleCloseOtherTabs: (_tabId: string) => { },
+    handleCloseAllTabs: () => { },
   });
   const menuActionContextRef = useRef({
     selectedIds,
@@ -368,19 +371,19 @@ export default function App() {
     handleDeleteImagesFromDisk: (_ids: string[], _label: string) => Promise.resolve([] as string[]),
     handleRevealInFolder: (_path?: string) => Promise.resolve(),
     handleOpenInEditor: (_path?: string) => Promise.resolve(),
-    startRenameImage: (_image: IndexedImage) => {},
-    startRenameCollection: (_collection: Collection) => {},
+    startRenameImage: (_image: IndexedImage) => { },
+    startRenameCollection: (_collection: Collection) => { },
     addFavoriteImages: (_ids: string[], _label: string) => Promise.resolve(),
     removeFavoriteImages: (_ids: string[], _label: string) => Promise.resolve(),
     addCollectionToFavorites: (_collection: Collection) => Promise.resolve(),
     removeCollectionFromFavorites: (_collection: Collection) => Promise.resolve(),
     handleRescanCollections: (_ids: string[]) => Promise.resolve(),
-    handleSelectAllImages: () => {},
-    handleInvertImageSelection: () => {},
-    handleClearImageSelection: () => {},
-    handleSelectAllCollections: () => {},
-    handleInvertCollectionSelection: () => {},
-    handleClearCollectionSelection: () => {},
+    handleSelectAllImages: () => { },
+    handleInvertImageSelection: () => { },
+    handleClearImageSelection: () => { },
+    handleSelectAllCollections: () => { },
+    handleInvertCollectionSelection: () => { },
+    handleClearCollectionSelection: () => { },
     handleCycleTab: (_direction: number) => undefined,
     handleDuplicateTab: () => undefined,
     handleCloseTab: (_tabId: string) => undefined,
@@ -921,10 +924,10 @@ export default function App() {
         const image = selectedOrderedImages[index];
         return image
           ? {
-              id: image.id,
-              fileName: image.fileName,
-              nextName: formatBulkRenameName(image, base, digits, index),
-            }
+            id: image.id,
+            fileName: image.fileName,
+            nextName: formatBulkRenameName(image, base, digits, index),
+          }
           : null;
       })
       .filter((entry): entry is { id: string; fileName: string; nextName: string } => Boolean(entry));
@@ -1139,7 +1142,7 @@ export default function App() {
         });
       };
 
-  console.log("[comfy-browser] Starting file URL hydration", { total: sourceImages.length });
+      console.log("[comfy-browser] Starting file URL hydration", { total: sourceImages.length });
       idleId = requestIdle(() => {
         void runBatch();
       });
@@ -1231,8 +1234,8 @@ export default function App() {
         getAppPref<ImageSort>("imageSort"),
       ]);
       const baseImages = imageRows.map((image: IndexedImage) => ({ ...image, fileUrl: image.filePath }));
-  const fallbackActiveCollection = storedCollection;
-  const fallbackCollectionSort = storedCollectionSort;
+      const fallbackActiveCollection = storedCollection;
+      const fallbackCollectionSort = storedCollectionSort;
       console.log("[comfy-browser] Loaded", {
         collections: collectionRows.length,
         images: baseImages.length,
@@ -1500,11 +1503,11 @@ export default function App() {
       prev.map((tab) =>
         tab.id === currentTabId
           ? {
-              id: currentTabId,
-              title: target.fileName,
-              type: "image" as const,
-              image: target,
-            }
+            id: currentTabId,
+            title: target.fileName,
+            type: "image" as const,
+            image: target,
+          }
           : tab
       )
     );
@@ -1594,8 +1597,8 @@ export default function App() {
             context.selectedCollectionIds.size === 1
               ? context.collections.find((collection) => context.selectedCollectionIds.has(collection.id))
               : context.activeCollection !== "all"
-              ? context.collectionById.get(context.activeCollection) ?? null
-              : null;
+                ? context.collectionById.get(context.activeCollection) ?? null
+                : null;
           if (collectionTarget) {
             context.startRenameCollection(collectionTarget);
           }
@@ -1604,8 +1607,8 @@ export default function App() {
             context.activeTab.type === "image"
               ? context.activeTab.image
               : context.selectedIds.size === 1
-              ? context.images.find((image) => context.selectedIds.has(image.id))
-              : null;
+                ? context.images.find((image) => context.selectedIds.has(image.id))
+                : null;
           if (imageTarget) {
             context.startRenameImage(imageTarget);
           }
@@ -1644,8 +1647,8 @@ export default function App() {
           context.activeTab.type === "image"
             ? context.activeTab.image
             : context.selectedIds.size === 1
-            ? context.images.find((image) => context.selectedIds.has(image.id))
-            : null;
+              ? context.images.find((image) => context.selectedIds.has(image.id))
+              : null;
         if (target) {
           void context.toggleFavoriteImage(target);
         }
@@ -2045,8 +2048,8 @@ export default function App() {
       kind: "folder",
     });
     if (!result?.success) {
-  setToastMessage(result?.message ?? "Failed to rename collection");
-  setLastCopied(result?.message ?? "Failed to rename collection");
+      setToastMessage(result?.message ?? "Failed to rename collection");
+      setLastCopied(result?.message ?? "Failed to rename collection");
       return;
     }
     await updateCollectionInfo(collection.id, { name: trimmed, rootPath: newRootPath });
@@ -2072,9 +2075,9 @@ export default function App() {
       prev.map((tab) =>
         tab.type === "image" && tab.image.collectionId === collection.id
           ? {
-              ...tab,
-              image: updatedMap.get(tab.image.id) ?? tab.image,
-            }
+            ...tab,
+            image: updatedMap.get(tab.image.id) ?? tab.image,
+          }
           : tab
       )
     );
@@ -2085,15 +2088,15 @@ export default function App() {
     );
     removeThumbnailEntries(updatedImages.map((entry) => entry.id));
     hydrateFileUrls(updatedImages);
-  setToastMessage(`Renamed collection to ${trimmed}`);
-  setLastCopied(`Renamed collection to ${trimmed}`);
+    setToastMessage(`Renamed collection to ${trimmed}`);
+    setLastCopied(`Renamed collection to ${trimmed}`);
     setRenameState(null);
   }
 
   const handleOpenBulkRename = useCallback(() => {
     if (selectedOrderedImages.length === 0) return;
     setBulkRenameError(null);
-  setBulkRenameDigits(calculateBulkRenameDigits(selectedOrderedImages.length));
+    setBulkRenameDigits(calculateBulkRenameDigits(selectedOrderedImages.length));
     setBulkRenameBase(deriveBulkRenameBase(selectedOrderedImages[0]));
     setBulkRenameOpen(true);
   }, [deriveBulkRenameBase, selectedOrderedImages]);
@@ -2192,11 +2195,61 @@ export default function App() {
     }
   }, [bulkRenameBase, bulkRenameDigits, hydrateFileUrls, removeThumbnailEntries, selectedOrderedImages, setToastMessage, setLastCopied]);
 
+  const handleBulkRenameDialogKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      if (!bulkRenameOpen) return;
+      const focusableSelector = "button:not([disabled]), input:not([disabled])";
+      const modal = bulkRenameDialogRef.current;
+      if (event.key === "Tab" && modal) {
+        const focusable = Array.from(modal.querySelectorAll<HTMLElement>(focusableSelector));
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+      if (event.key === "Enter") {
+        if (
+          document.activeElement instanceof HTMLButtonElement &&
+          document.activeElement.dataset.action === "cancel"
+        ) {
+          return;
+        }
+        event.preventDefault();
+        if (!bulkRenaming) {
+          void handleBulkRename();
+        }
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setBulkRenameOpen(false);
+        setBulkRenameError(null);
+      }
+    },
+    [bulkRenameOpen, bulkRenaming, handleBulkRename]
+  );
+
   useEffect(() => {
     if (bulkRenameOpen && selectedOrderedImages.length === 0) {
       setBulkRenameOpen(false);
     }
   }, [bulkRenameOpen, selectedOrderedImages.length]);
+
+  useEffect(() => {
+    if (!bulkRenameOpen) return;
+    const timer = window.setTimeout(() => {
+      if (bulkRenameBaseInputRef.current) {
+        bulkRenameBaseInputRef.current.focus();
+        bulkRenameBaseInputRef.current.select();
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [bulkRenameOpen]);
   const handleRemoveSelected = async () => {
     if (selectedIds.size === 0) return;
     await handleRemoveImages(Array.from(selectedIds), { label: `${selectedIds.size} selected images` });
@@ -2772,7 +2825,7 @@ export default function App() {
           .map((image) => image.id);
         await handleRemoveImages(missingIds, { confirm: false });
       }
-  const rootPaths = targets.map((collection) => collection.rootPath);
+      const rootPaths = targets.map((collection) => collection.rootPath);
       const imagesForIndex = missingPathSet.size > 0
         ? images.filter((image) => !missingPathSet.has(image.filePath))
         : images;
@@ -2791,7 +2844,7 @@ export default function App() {
         liveIndex.basePaths.forEach((path) => existingFilePaths.add(path));
         liveIndex.addedPaths.forEach((path) => existingFilePaths.add(path));
       }
-  const collectionByRoot = new Map(targets.map((collection) => [collection.rootPath, collection]));
+      const collectionByRoot = new Map(targets.map((collection) => [collection.rootPath, collection]));
       const newImages: IndexedImage[] = [];
 
       if (payload.length > 0) {
@@ -2811,8 +2864,8 @@ export default function App() {
 
       const liveAddedImages = liveIndexRef.current?.addedPaths.size ?? 0;
       const totalImages = liveAddedImages + newImages.length;
-  const totalCollections = liveIndexRef.current?.addedCollectionRoots.size ?? 0;
-  const summary = formatIndexSummary("Rescan", totalCollections, totalImages, token.cancelled);
+      const totalCollections = liveIndexRef.current?.addedCollectionRoots.size ?? 0;
+      const summary = formatIndexSummary("Rescan", totalCollections, totalImages, token.cancelled);
       setToastMessage(summary);
       setLastCopied(summary);
 
@@ -2895,8 +2948,8 @@ export default function App() {
         liveIndex.basePaths.forEach((path) => existingFilePaths.add(path));
         liveIndex.addedPaths.forEach((path) => existingFilePaths.add(path));
       }
-  const collectionByRoot = new Map(collections.map((collection) => [collection.rootPath, collection]));
-  const newCollections: Collection[] = [];
+      const collectionByRoot = new Map(collections.map((collection) => [collection.rootPath, collection]));
+      const newCollections: Collection[] = [];
       const newImages: IndexedImage[] = [];
 
       if (payload.length > 0) {
@@ -2992,20 +3045,20 @@ export default function App() {
       handleDeleteSelectedCollectionsFromDisk,
       handleDeleteImagesFromDisk,
       handleRevealInFolder,
-  handleOpenInEditor,
+      handleOpenInEditor,
       startRenameImage,
       startRenameCollection,
       addFavoriteImages,
       removeFavoriteImages,
       addCollectionToFavorites,
       removeCollectionFromFavorites,
-  handleRescanCollections,
-  handleSelectAllImages,
-  handleInvertImageSelection,
-  handleClearImageSelection,
-  handleSelectAllCollections,
-  handleInvertCollectionSelection,
-  handleClearCollectionSelection,
+      handleRescanCollections,
+      handleSelectAllImages,
+      handleInvertImageSelection,
+      handleClearImageSelection,
+      handleSelectAllCollections,
+      handleInvertCollectionSelection,
+      handleClearCollectionSelection,
       handleCycleTab,
       handleDuplicateTab,
       handleCloseTab,
@@ -3028,20 +3081,20 @@ export default function App() {
     handleDeleteSelectedCollectionsFromDisk,
     handleDeleteImagesFromDisk,
     handleRevealInFolder,
-  handleOpenInEditor,
+    handleOpenInEditor,
     startRenameImage,
     startRenameCollection,
     addFavoriteImages,
     removeFavoriteImages,
     addCollectionToFavorites,
     removeCollectionFromFavorites,
-  handleRescanCollections,
-  handleSelectAllImages,
-  handleInvertImageSelection,
-  handleClearImageSelection,
-  handleSelectAllCollections,
-  handleInvertCollectionSelection,
-  handleClearCollectionSelection,
+    handleRescanCollections,
+    handleSelectAllImages,
+    handleInvertImageSelection,
+    handleClearImageSelection,
+    handleSelectAllCollections,
+    handleInvertCollectionSelection,
+    handleClearCollectionSelection,
     handleCycleTab,
     handleDuplicateTab,
     handleCloseTab,
@@ -3060,8 +3113,8 @@ export default function App() {
         context.activeTab.type === "image"
           ? context.activeTab.image
           : firstSelectedId
-          ? context.images.find((image) => image.id === firstSelectedId)
-          : undefined;
+            ? context.images.find((image) => image.id === firstSelectedId)
+            : undefined;
       if (action === "add-folder") {
         void context.handleAddFolder();
         return;
@@ -3148,8 +3201,8 @@ export default function App() {
           context.activeTab.type === "image"
             ? context.activeTab.image
             : context.selectedIds.size === 1
-            ? context.images.find((image) => context.selectedIds.has(image.id))
-            : null;
+              ? context.images.find((image) => context.selectedIds.has(image.id))
+              : null;
         if (target) {
           context.startRenameImage(target);
         }
@@ -3164,8 +3217,8 @@ export default function App() {
           context.selectedCollectionIds.size === 1
             ? context.collections.find((collection) => context.selectedCollectionIds.has(collection.id))
             : context.activeCollection !== "all"
-            ? context.collectionById.get(context.activeCollection) ?? null
-            : null;
+              ? context.collectionById.get(context.activeCollection) ?? null
+              : null;
         if (target) {
           context.startRenameCollection(target);
         }
@@ -3226,8 +3279,8 @@ export default function App() {
       activeTab.type === "image"
         ? activeTab.image
         : firstSelectedId
-        ? imageById.get(firstSelectedId)
-        : undefined;
+          ? imageById.get(firstSelectedId)
+          : undefined;
     const hasActiveImage = Boolean(activeImage);
     const collectionTargetId =
       activeTab.type === "image" ? activeTab.image.collectionId : activeCollection;
@@ -3247,7 +3300,7 @@ export default function App() {
         (activeCollection !== "all" && activeCollection !== FAVORITES_ID && selectedCollectionIds.size === 0),
       hasImages: isLibraryTab && filteredImages.length > 0,
       hasCollections: collections.length > 0,
-        canBulkRenameImages: selectedOrderedImages.length > 0,
+      canBulkRenameImages: selectedOrderedImages.length > 0,
       isIndexing,
       isRemoving: !!(removalCollectionProgress || removalImageProgress),
       isDeleting: isDeletingFiles,
@@ -3527,11 +3580,10 @@ export default function App() {
     <div className="flex h-screen flex-col">
       {toastVisibleMessage ? (
         <div
-          className={`pointer-events-none fixed bottom-6 right-6 z-50 rounded-lg border border-slate-200/60 bg-slate-100/95 px-4 py-2 text-xs text-slate-900 shadow-xl duration-200 ${
-            toastLeaving
+          className={`pointer-events-none fixed bottom-6 right-6 z-50 rounded-lg border border-slate-200/60 bg-slate-100/95 px-4 py-2 text-xs text-slate-900 shadow-xl duration-200 ${toastLeaving
               ? "animate-out fade-out slide-out-to-bottom-2"
               : "animate-in fade-in slide-in-from-bottom-2"
-          }`}
+            }`}
         >
           {toastVisibleMessage}
         </div>
@@ -3572,7 +3624,12 @@ export default function App() {
       ) : null}
       {bulkRenameOpen ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 px-4">
-          <div className="pointer-events-auto w-full max-w-md rounded-2xl border border-slate-800 bg-slate-950/90 p-6 text-sm text-slate-100 shadow-xl">
+          <div
+            ref={bulkRenameDialogRef}
+            onKeyDown={handleBulkRenameDialogKeyDown}
+            tabIndex={-1}
+            className="pointer-events-auto w-full max-w-md rounded-2xl border border-slate-800 bg-slate-950/90 p-6 text-sm text-slate-100 shadow-xl"
+          >
             <div className="flex items-center justify-between">
               <div className="text-base font-semibold">Bulk rename {selectedOrderedImages.length} file(s)</div>
               <button
@@ -3582,8 +3639,10 @@ export default function App() {
                   setBulkRenameError(null);
                 }}
                 className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-slate-500"
+                data-action="cancel"
+                aria-label="Close bulk rename"
               >
-                Close
+                ×
               </button>
             </div>
             <div className="mt-4 space-y-3">
@@ -3595,8 +3654,10 @@ export default function App() {
               </label>
               <input
                 id={bulkRenameBaseInputId}
+                ref={bulkRenameBaseInputRef}
                 value={bulkRenameBase}
                 onChange={(event) => setBulkRenameBase(event.target.value)}
+                onFocus={(event) => event.currentTarget.select()}
                 placeholder="Enter a new base name"
                 className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
               />
@@ -3608,10 +3669,12 @@ export default function App() {
               </label>
               <input
                 id={bulkRenameDigitsInputId}
+                ref={bulkRenameDigitsInputRef}
                 type="number"
                 min={1}
                 value={bulkRenameDigits}
                 onChange={(event) => setBulkRenameDigits(Math.max(1, Number(event.target.value) || 1))}
+                onFocus={(event) => event.currentTarget.select()}
                 className="w-24 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
                 title="Number of digits to pad for each file"
                 aria-describedby={bulkRenameDigitsHelperId}
@@ -3650,6 +3713,7 @@ export default function App() {
                   setBulkRenameError(null);
                 }}
                 className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-300"
+                data-action="cancel"
               >
                 Cancel
               </button>
@@ -3686,11 +3750,10 @@ export default function App() {
             <div className="flex items-center justify-between">
               <button
                 onClick={() => setActiveCollection("all")}
-                className={`w-full rounded-lg px-3 py-2 text-left text-sm ${
-                  collectionHighlightId === "all"
+                className={`w-full rounded-lg px-3 py-2 text-left text-sm ${collectionHighlightId === "all"
                     ? "bg-slate-800 text-white"
                     : "text-slate-300 hover:bg-slate-900"
-                }`}
+                  }`}
               >
                 All Images
               </button>
@@ -3698,11 +3761,10 @@ export default function App() {
             <div className="flex items-center justify-between">
               <button
                 onClick={() => setActiveCollection(FAVORITES_ID)}
-                className={`w-full rounded-lg px-3 py-2 text-left text-sm ${
-                  collectionHighlightId === FAVORITES_ID
+                className={`w-full rounded-lg px-3 py-2 text-left text-sm ${collectionHighlightId === FAVORITES_ID
                     ? "bg-slate-800 text-white"
                     : "text-slate-300 hover:bg-slate-900"
-                }`}
+                  }`}
               >
                 Favourites
               </button>
@@ -3733,11 +3795,9 @@ export default function App() {
                     onKeyDown={(event) => handleCollectionRowKeyDown(collection, index, event)}
                     onFocus={() => setCollectionFocusedId(collection.id)}
                     aria-pressed={isSelected}
-                    className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${
-                      isActive ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900"
-                    } ${isSelected ? "bg-slate-900/70 border border-slate-700" : "border border-transparent"} ${
-                      isFocused ? "ring-1 ring-indigo-400 ring-inset" : ""
-                    }`}
+                    className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${isActive ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900"
+                      } ${isSelected ? "bg-slate-900/70 border border-slate-700" : "border border-transparent"} ${isFocused ? "ring-1 ring-indigo-400 ring-inset" : ""
+                      }`}
                   >
                     {renameState?.type === "collection" && renameState.id === collection.id ? (
                       <div className="min-w-0 text-left">
@@ -4005,11 +4065,10 @@ export default function App() {
                 ref={(node) => {
                   tabRefs.current.library = node;
                 }}
-                className={`flex h-7 flex-none items-center gap-2 px-4 py-0 text-sm ${
-                  activeTab.id === "library"
+                className={`flex h-7 flex-none items-center gap-2 px-4 py-0 text-sm ${activeTab.id === "library"
                     ? "bg-indigo-500 text-white"
                     : "bg-slate-800 text-slate-200"
-                }`}
+                  }`}
               >
                 <button
                   onClick={() => setActiveTab(LibraryTab)}
@@ -4040,9 +4099,8 @@ export default function App() {
                             ref={(node) => {
                               tabRefs.current[tab.id] = node;
                             }}
-                            className={`flex h-7 flex-none items-center gap-2 rounded-lg px-4 py-0 text-sm ${
-                              isActive ? "bg-indigo-500 text-white" : "bg-slate-800 text-slate-200"
-                            }`}
+                            className={`flex h-7 flex-none items-center gap-2 rounded-lg px-4 py-0 text-sm ${isActive ? "bg-indigo-500 text-white" : "bg-slate-800 text-slate-200"
+                              }`}
                           >
                             <button
                               onClick={() => setActiveTab(tab)}
@@ -4138,9 +4196,8 @@ export default function App() {
                           ref={(node) =>
                             assignVirtualPosition(node, top, left, iconSize, height)
                           }
-                          className={`absolute rounded-xl border p-2 text-left ${
-                            isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800"
-                          } ${absoluteIndex === focusedIndex ? "ring-2 ring-indigo-400" : ""}`}
+                          className={`absolute rounded-xl border p-2 text-left ${isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800"
+                            } ${absoluteIndex === focusedIndex ? "ring-2 ring-indigo-400" : ""}`}
                         >
                           <div className="relative aspect-square overflow-hidden rounded-lg bg-slate-950 p-1">
                             {!isLoaded ? (
@@ -4150,9 +4207,8 @@ export default function App() {
                               src={thumbUrl}
                               alt={image.fileName}
                               loading="lazy"
-                              className={`h-full w-full object-contain transition-opacity ${
-                                isLoaded ? "opacity-100" : "opacity-0"
-                              }`}
+                              className={`h-full w-full object-contain transition-opacity ${isLoaded ? "opacity-100" : "opacity-0"
+                                }`}
                               draggable={false}
                               onLoad={() => {
                                 markThumbLoaded(image.id);
@@ -4223,9 +4279,8 @@ export default function App() {
                           void handleOpenImages([image]);
                         }}
                         ref={(node) => assignVirtualPosition(node, top, left, iconSize, height)}
-                        className={`absolute rounded-xl border p-2 text-left ${
-                          isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800 hover:border-slate-600"
-                        } ${absoluteIndex === focusedIndex ? "ring-2 ring-indigo-400" : ""}`}
+                        className={`absolute rounded-xl border p-2 text-left ${isSelected ? "border-indigo-500 bg-slate-900" : "border-slate-800 hover:border-slate-600"
+                          } ${absoluteIndex === focusedIndex ? "ring-2 ring-indigo-400" : ""}`}
                       >
                         <div className="relative aspect-square overflow-hidden rounded-lg bg-slate-950 p-1">
                           {!isLoaded ? (
@@ -4235,9 +4290,8 @@ export default function App() {
                             src={thumbUrl}
                             alt={image.fileName}
                             loading="lazy"
-                            className={`h-full w-full object-contain transition-opacity ${
-                              isLoaded ? "opacity-100" : "opacity-0"
-                            }`}
+                            className={`h-full w-full object-contain transition-opacity ${isLoaded ? "opacity-100" : "opacity-0"
+                              }`}
                             draggable={false}
                             onLoad={() => {
                               markThumbLoaded(image.id);
@@ -4248,11 +4302,10 @@ export default function App() {
                               event.stopPropagation();
                               void toggleFavoriteImage(image);
                             }}
-                            className={`absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full text-xs transition ${
-                              isFavorite
+                            className={`absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full text-xs transition ${isFavorite
                                 ? "bg-amber-400/90 text-slate-900"
                                 : "bg-slate-800/80 text-slate-300 hover:bg-slate-700"
-                            }`}
+                              }`}
                             title={isFavorite ? "Remove from favourites" : "Add to favourites"}
                           >
                             ★
@@ -4384,11 +4437,10 @@ export default function App() {
                 <div className="mt-3">
                   <button
                     onClick={() => void toggleFavoriteImage(activeTabContent)}
-                    className={`rounded-md border px-2 py-1 text-xs transition ${
-                      favoriteIds.has(activeTabContent.id)
+                    className={`rounded-md border px-2 py-1 text-xs transition ${favoriteIds.has(activeTabContent.id)
                         ? "border-amber-400/70 bg-amber-500/10 text-amber-200"
                         : "border-slate-700 text-slate-300 hover:border-slate-500"
-                    }`}
+                      }`}
                   >
                     {favoriteIds.has(activeTabContent.id) ? "★ Remove from favourites" : "☆ Add to favourites"}
                   </button>
@@ -4412,11 +4464,10 @@ export default function App() {
                           "Decoded metadata"
                         )
                       }
-                      className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${
-                        lastCopied === "Decoded metadata"
+                      className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${lastCopied === "Decoded metadata"
                           ? "border-indigo-400 bg-indigo-500/20"
                           : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
-                      }`}
+                        }`}
                       aria-label="Copy decoded metadata"
                       title="Copy decoded metadata"
                     >
@@ -4432,11 +4483,10 @@ export default function App() {
                             <div className="break-words text-slate-100">{metadataSummary.promptText}</div>
                             <button
                               onClick={() => copyToClipboard(metadataSummary.promptText ?? "", "Prompt")}
-                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${
-                                lastCopied === "Prompt"
+                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${lastCopied === "Prompt"
                                   ? "border-indigo-400 bg-indigo-500/20"
                                   : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
-                              }`}
+                                }`}
                               aria-label="Copy prompt"
                               title="Copy prompt"
                             >
@@ -4466,11 +4516,10 @@ export default function App() {
                             <div className="break-words text-slate-100">{metadataSummary.checkpoint}</div>
                             <button
                               onClick={() => copyToClipboard(metadataSummary.checkpoint ?? "", "Checkpoint")}
-                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${
-                                lastCopied === "Checkpoint"
+                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${lastCopied === "Checkpoint"
                                   ? "border-indigo-400 bg-indigo-500/20"
                                   : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
-                              }`}
+                                }`}
                               aria-label="Copy checkpoint"
                               title="Copy checkpoint"
                             >
@@ -4484,11 +4533,10 @@ export default function App() {
                             <div className="break-words text-slate-100">{metadataSummary.seed}</div>
                             <button
                               onClick={() => copyToClipboard(metadataSummary.seed ?? "", "Seed")}
-                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${
-                                lastCopied === "Seed"
+                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${lastCopied === "Seed"
                                   ? "border-indigo-400 bg-indigo-500/20"
                                   : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
-                              }`}
+                                }`}
                               aria-label="Copy seed"
                               title="Copy seed"
                             >
@@ -4509,11 +4557,10 @@ export default function App() {
                                     <span className="min-w-0 flex-1 break-words">• {label}</span>
                                     <button
                                       onClick={() => copyToClipboard(label, copyLabel)}
-                                      className={`shrink-0 rounded-[10px] border px-2 py-1 text-xs text-slate-200 transition ${
-                                        lastCopied === copyLabel
+                                      className={`shrink-0 rounded-[10px] border px-2 py-1 text-xs text-slate-200 transition ${lastCopied === copyLabel
                                           ? "border-indigo-400 bg-indigo-500/20"
                                           : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
-                                      }`}
+                                        }`}
                                       aria-label={`Copy LoRA ${lora.name}`}
                                       title={`Copy ${lora.name}`}
                                     >

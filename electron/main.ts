@@ -222,18 +222,6 @@ const buildAppMenu = () => {
                 click: () => sendMenuAction("rename-selected-collection"),
             },
             {
-                id: "menu-add-selected-collections-favorites",
-                label: "Add Selected Collections to Favourites",
-                enabled: false,
-                click: () => sendMenuAction("add-selected-collections-favorites"),
-            },
-            {
-                id: "menu-remove-selected-collections-favorites",
-                label: "Remove Selected Collections from Favourites",
-                enabled: false,
-                click: () => sendMenuAction("remove-selected-collections-favorites"),
-            },
-            {
                 id: "menu-rescan-selected-collections",
                 label: "Rescan Selected Collections",
                 enabled: false,
@@ -251,6 +239,19 @@ const buildAppMenu = () => {
                 label: "Delete Selected Collections from Disk…",
                 enabled: false,
                 click: () => sendMenuAction("delete-selected-collections-disk"),
+            },
+            { type: "separator" },
+            {
+                id: "menu-add-selected-collections-favorites",
+                label: "Add Selected Collections to Favourites",
+                enabled: false,
+                click: () => sendMenuAction("add-selected-collections-favorites"),
+            },
+            {
+                id: "menu-remove-selected-collections-favorites",
+                label: "Remove Selected Collections from Favourites",
+                enabled: false,
+                click: () => sendMenuAction("remove-selected-collections-favorites"),
             },
             { type: "separator" },
             {
@@ -304,18 +305,6 @@ const buildAppMenu = () => {
                 enabled: false,
                 click: () => sendMenuAction("bulk-rename-selected-images"),
             },
-            {
-                id: "menu-add-selected-images-favorites",
-                label: "Add Selected Images to Favourites",
-                enabled: false,
-                click: () => sendMenuAction("add-selected-images-favorites"),
-            },
-            {
-                id: "menu-remove-selected-images-favorites",
-                label: "Remove Selected Images from Favourites",
-                enabled: false,
-                click: () => sendMenuAction("remove-selected-images-favorites"),
-            },
             { type: "separator" },
             {
                 id: "menu-remove-selected-images",
@@ -328,6 +317,19 @@ const buildAppMenu = () => {
                 label: "Delete Selected Images from Disk…",
                 enabled: false,
                 click: () => sendMenuAction("delete-selected-images-disk"),
+            },
+            { type: "separator" },
+            {
+                id: "menu-add-selected-images-favorites",
+                label: "Add Selected Images to Favourites",
+                enabled: false,
+                click: () => sendMenuAction("add-selected-images-favorites"),
+            },
+            {
+                id: "menu-remove-selected-images-favorites",
+                label: "Remove Selected Images from Favourites",
+                enabled: false,
+                click: () => sendMenuAction("remove-selected-images-favorites"),
             },
             { type: "separator" },
             {
@@ -1085,21 +1087,11 @@ ipcMain.handle(
                 if (payload.selectedCount >= 1) {
                     const countLabel = payload.selectedCount > 1 ? ` (${payload.selectedCount})` : "";
                     items.push({
-                        label: `Bulk rename selected images${countLabel}…`,
+                        label: `Bulk Rename Selected Images${countLabel}…`,
                         click: () => finish("bulk-rename-selected-images"),
                     });
                 }
-                if (payload.selectedCount >= 1) {
-                    const countLabel = payload.selectedCount > 1 ? ` (${payload.selectedCount})` : "";
-                    items.push({
-                        label: `Add Selected Images${countLabel} to Favourites`,
-                        click: () => finish("add-selected-images-favorites"),
-                    });
-                    items.push({
-                        label: `Remove Selected Images${countLabel} from Favourites`,
-                        click: () => finish("remove-selected-images-favorites"),
-                    });
-                }
+                items.push({ type: "separator" });
                 if (payload.selectedCount >= 1) {
                     items.push({
                         label: `Remove Selected Images from Index${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""}…`,
@@ -1110,6 +1102,18 @@ ipcMain.handle(
                         label: `Delete Selected Images${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""} from Disk…`,
                         click: () => finish("delete-selected-images-disk"),
                         enabled: !removalLocked,
+                    });
+                }
+                items.push({ type: "separator" });
+                if (payload.selectedCount >= 1) {
+                    const countLabel = payload.selectedCount > 1 ? ` (${payload.selectedCount})` : "";
+                    items.push({
+                        label: `Add Selected Images${countLabel} to Favourites`,
+                        click: () => finish("add-selected-images-favorites"),
+                    });
+                    items.push({
+                        label: `Remove Selected Images${countLabel} from Favourites`,
+                        click: () => finish("remove-selected-images-favorites"),
                     });
                 }
                 items.push({ type: "separator" });
@@ -1132,27 +1136,17 @@ ipcMain.handle(
                     label: "Reveal in File Manager",
                     click: () => finish("reveal-collection"),
                 });
-                items.push({
-                    label: "Rescan Collection",
-                    click: () => finish("rescan-collection"),
-                });
                 if (payload.selectedCount <= 1) {
                     items.push({
                         label: "Rename Collection…",
                         click: () => finish("rename-collection"),
                     });
                 }
-                if (payload.selectedCount >= 1) {
-                    const countLabel = payload.selectedCount > 1 ? ` (${payload.selectedCount})` : "";
-                    items.push({
-                        label: `Add Selected Collections${countLabel} to Favourites`,
-                        click: () => finish("add-selected-collections-favorites"),
-                    });
-                    items.push({
-                        label: `Remove Selected Collections${countLabel} from Favourites`,
-                        click: () => finish("remove-selected-collections-favorites"),
-                    });
-                }
+                items.push({
+                    label: "Rescan Collection",
+                    click: () => finish("rescan-collection"),
+                });
+                items.push({ type: "separator" });
                 if (payload.selectedCount >= 1) {
                     items.push({
                         label: `Remove Selected Collections from Index${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""}…`,
@@ -1163,6 +1157,18 @@ ipcMain.handle(
                         label: `Delete Selected Collections${payload.selectedCount > 1 ? ` (${payload.selectedCount})` : ""} from Disk…`,
                         click: () => finish("delete-selected-collections-disk"),
                         enabled: !removalLocked,
+                    });
+                }
+                items.push({ type: "separator" });
+                if (payload.selectedCount >= 1) {
+                    const countLabel = payload.selectedCount > 1 ? ` (${payload.selectedCount})` : "";
+                    items.push({
+                        label: `Add Selected Collections${countLabel} to Favourites`,
+                        click: () => finish("add-selected-collections-favorites"),
+                    });
+                    items.push({
+                        label: `Remove Selected Collections${countLabel} from Favourites`,
+                        click: () => finish("remove-selected-collections-favorites"),
                     });
                 }
                 items.push({ type: "separator" });
