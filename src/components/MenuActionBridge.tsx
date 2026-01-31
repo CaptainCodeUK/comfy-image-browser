@@ -46,6 +46,7 @@ type MenuActionBridgeProps = {
   handleCloseOtherTabs: (tabId: string) => void;
   handleCloseAllTabs: () => void;
   handleOpenBulkRename: () => void;
+  handleOpenMove: () => void;
   setAboutOpen: (open: boolean) => void;
 };
 
@@ -85,6 +86,7 @@ type MenuContext = {
   handleCloseOtherTabs: (tabId: string) => void;
   handleCloseAllTabs: () => void;
   handleOpenBulkRename: () => void;
+  handleOpenMove: () => void;
   setAboutOpen: (open: boolean) => void;
 };
 
@@ -133,6 +135,7 @@ export function MenuActionBridge({
   handleCloseOtherTabs,
   handleCloseAllTabs,
   handleOpenBulkRename,
+  handleOpenMove,
   setAboutOpen,
 }: MenuActionBridgeProps) {
   const contextRef = useRef<MenuContext>({
@@ -171,6 +174,7 @@ export function MenuActionBridge({
     handleCloseOtherTabs,
     handleCloseAllTabs,
     handleOpenBulkRename,
+    handleOpenMove,
     setAboutOpen,
   });
 
@@ -211,6 +215,7 @@ export function MenuActionBridge({
       handleCloseOtherTabs,
       handleCloseAllTabs,
       handleOpenBulkRename,
+      handleOpenMove,
       setAboutOpen,
     };
   }, [
@@ -249,6 +254,7 @@ export function MenuActionBridge({
     handleCloseOtherTabs,
     handleCloseAllTabs,
     handleOpenBulkRename,
+    handleOpenMove,
     setAboutOpen,
   ]);
 
@@ -360,6 +366,10 @@ export function MenuActionBridge({
         context.handleOpenBulkRename();
         return;
       }
+      if (action === "move-selected-images") {
+        context.handleOpenMove();
+        return;
+      }
       if (action === "rename-selected-collection") {
         const target =
           context.selectedCollectionIds.size === 1
@@ -446,6 +456,7 @@ export function MenuActionBridge({
   hasImages: isCollectionTab && filteredImages.length > 0,
       hasCollections: collections.length > 0,
       canBulkRenameImages: selectedOrderedImages.length > 0,
+  canMoveSelectedImages: selectedOrderedImages.length > 0,
       isIndexing,
       isRemoving: !!(removalCollectionProgress || removalImageProgress),
       isDeleting: isDeletingFiles,

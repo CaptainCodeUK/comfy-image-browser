@@ -18,6 +18,7 @@ type ContextMenuDispatcherProps = {
   handleOpenInEditor: (filePath?: string) => Promise<void>;
   handleDeleteImagesFromDisk: (ids: string[], label: string) => Promise<string[]>;
   handleOpenBulkRename: () => void;
+  handleOpenMove: () => void;
   handleRescanCollections: (collectionIds: string[]) => Promise<void>;
   handleRemoveSelectedCollections: () => Promise<void>;
   handleDeleteSelectedCollectionsFromDisk: () => Promise<void>;
@@ -45,6 +46,7 @@ export function useContextMenuDispatcher({
   handleOpenInEditor,
   handleDeleteImagesFromDisk,
   handleOpenBulkRename,
+  handleOpenMove,
   handleRescanCollections,
   handleRemoveSelectedCollections,
   handleDeleteSelectedCollectionsFromDisk,
@@ -99,6 +101,9 @@ export function useContextMenuDispatcher({
       if (action === "bulk-rename-selected-images") {
         handleOpenBulkRename();
       }
+      if (action === "move-selected-images") {
+        handleOpenMove();
+      }
     },
     [
       bridgeAvailable,
@@ -114,6 +119,7 @@ export function useContextMenuDispatcher({
       handleInvertImageSelection,
       handleClearImageSelection,
       handleOpenBulkRename,
+      handleOpenMove,
     ]
   );
 

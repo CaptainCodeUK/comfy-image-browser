@@ -340,6 +340,12 @@ const buildAppMenu = () => {
                 enabled: false,
                 click: () => sendMenuAction("bulk-rename-selected-images"),
             },
+            {
+                id: "menu-move-selected-images",
+                label: "Move Selected Images…",
+                enabled: false,
+                click: () => sendMenuAction("move-selected-images"),
+            },
             { type: "separator" },
             {
                 id: "menu-remove-selected-images",
@@ -942,7 +948,7 @@ ipcMain.handle(
     "comfy:rename-path",
     async (
         _event: IpcMainInvokeEvent,
-        payload: { oldPath: string; newPath: string; kind: "file" | "folder" }
+        payload: { oldPath: string; newPath: string; kind: "file" | "folder"; overwrite?: boolean }
     ) => {
         if (!payload?.oldPath || !payload?.newPath) {
             return { success: false, message: "Missing path" };
@@ -952,11 +958,22 @@ ipcMain.handle(
         } catch {
             return { success: false, message: "Source path does not exist" };
         }
+        let targetExists = true;
         try {
             await fs.access(payload.newPath);
-            return { success: false, message: "Target already exists" };
         } catch {
-            // target does not exist
+            targetExists = false;
+        }
+        if (targetExists) {
+            if (payload.overwrite && payload.kind === "file") {
+                try {
+                    await fs.rm(payload.newPath);
+                } catch (error) {
+                    return { success: false, message: error instanceof Error ? error.message : "Failed to remove target" };
+                }
+            } else {
+                return { success: false, message: "Target already exists" };
+            }
         }
 
         await fs.rename(payload.oldPath, payload.newPath);
@@ -976,6 +993,16 @@ ipcMain.handle(
         return { success: true };
     }
 );
+
+ipcMain.handle("comfy:ensure-directory", async (_event: IpcMainInvokeEvent, dirPath: string) => {
+    if (!dirPath) return false;
+    try {
+        await fs.mkdir(dirPath, { recursive: true });
+        return true;
+    } catch {
+        return false;
+    }
+});
 
 ipcMain.handle("comfy:find-missing-files", async (_event: IpcMainInvokeEvent, filePaths: string[]) => {
     if (!Array.isArray(filePaths) || filePaths.length === 0) {
@@ -999,6 +1026,7 @@ ipcMain.on(
             hasImages: boolean;
             hasCollections: boolean;
             canBulkRenameImages: boolean;
+            canMoveSelectedImages: boolean;
             isIndexing: boolean;
             isRemoving: boolean;
             isDeleting: boolean;
@@ -1028,6 +1056,10 @@ ipcMain.on(
         updateMenuItemEnabled(
             "menu-bulk-rename-selected-images",
             state.canBulkRenameImages && !removalLocked
+        );
+        updateMenuItemEnabled(
+            "menu-move-selected-images",
+            state.canMoveSelectedImages && !removalLocked
         );
         updateMenuItemEnabled("menu-add-selected-images-favorites", state.hasSelectedImages);
         updateMenuItemEnabled("menu-remove-selected-images-favorites", state.hasSelectedImages);
@@ -1147,6 +1179,14 @@ ipcMain.handle(
                     items.push({
                         label: `Bulk Rename Selected Images${countLabel}…`,
                         click: () => finish("bulk-rename-selected-images"),
+                    });
+                }
+                if (payload.selectedCount >= 1) {
+                    const countLabel = payload.selectedCount > 1 ? ` (${payload.selectedCount})` : "";
+                    items.push({
+                        label: `Move Selected Images${countLabel}…`,
+                        click: () => finish("move-selected-images"),
+                        enabled: !removalLocked,
                     });
                 }
                 items.push({ type: "separator" });

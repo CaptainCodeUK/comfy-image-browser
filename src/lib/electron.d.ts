@@ -33,6 +33,7 @@ declare global {
         | "edit-image"
         | "rename-image"
         | "bulk-rename-selected-images"
+  | "move-selected-images"
         | "reveal-collection"
         | "rescan-collection"
         | "rename-collection"
@@ -52,10 +53,11 @@ declare global {
       revealInFolder: (filePath: string) => Promise<void>;
       openInEditor: (filePath: string) => Promise<void>;
       findMissingFiles: (paths: string[]) => Promise<string[]>;
-      renamePath: (payload: { oldPath: string; newPath: string; kind: "file" | "folder" }) => Promise<{
+  renamePath: (payload: { oldPath: string; newPath: string; kind: "file" | "folder"; overwrite?: boolean }) => Promise<{
         success: boolean;
         message?: string;
       }>;
+      ensureDirectory: (dirPath: string) => Promise<boolean>;
       getAppInfo: () => Promise<{ name: string; version: string }>;
   getLatestRelease: () => Promise<{ version: string; url: string }>;
       openExternal: (url: string) => Promise<boolean>;
@@ -70,6 +72,7 @@ declare global {
         hasImages: boolean;
         hasCollections: boolean;
         canBulkRenameImages: boolean;
+  canMoveSelectedImages: boolean;
         isIndexing: boolean;
         isRemoving: boolean;
         isDeleting: boolean;
@@ -93,6 +96,7 @@ declare global {
             | "remove-selected-collections-favorites"
             | "rescan-selected-collections"
             | "bulk-rename-selected-images"
+            | "move-selected-images"
             | "select-all-images"
             | "invert-image-selection"
             | "clear-image-selection"

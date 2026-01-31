@@ -72,6 +72,18 @@ export const addCollectionWithImages = async (rootPath: string, payloads: Indexe
   return { collection, images };
 };
 
+export const addCollectionRecord = async (rootPath: string) => {
+  const collection: Collection = {
+    id: crypto.randomUUID(),
+    name: createCollectionName(rootPath),
+    rootPath,
+    addedAt: new Date().toISOString(),
+  };
+  const db = await dbPromise;
+  await db.put("collections", collection);
+  return collection;
+};
+
 export const addImagesToCollection = async (collectionId: string, payloads: IndexedImagePayload[]) => {
   const images: IndexedImage[] = payloads.map((payload) => ({
     id: crypto.randomUUID(),
@@ -176,11 +188,19 @@ export const updateCollectionInfo = async (collectionId: string, updates: Partia
   return updated;
 };
 
-export const updateImageFileInfo = async (imageId: string, filePath: string, fileName: string) => {
+export const updateImageFileInfo = async (
+  imageId: string,
+  filePath: string,
+  fileName: string,
+  collectionId?: string
+) => {
   const db = await dbPromise;
   const image = await db.get("images", imageId);
   if (!image) return null;
   const updated = { ...image, filePath, fileName, fileUrl: filePath } as IndexedImage;
+  if (collectionId && collectionId !== image.collectionId) {
+    updated.collectionId = collectionId;
+  }
   await db.put("images", updated);
   return updated;
 };

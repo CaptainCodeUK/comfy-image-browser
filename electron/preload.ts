@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld("comfy", {
   findMissingFiles: (paths: string[]) => ipcRenderer.invoke("comfy:find-missing-files", paths),
   renamePath: (payload: { oldPath: string; newPath: string; kind: "file" | "folder" }) =>
     ipcRenderer.invoke("comfy:rename-path", payload),
+  ensureDirectory: (dirPath: string) => ipcRenderer.invoke("comfy:ensure-directory", dirPath),
   getAppInfo: () => ipcRenderer.invoke("comfy:get-app-info"),
   getLatestRelease: () => ipcRenderer.invoke("comfy:get-latest-release"),
   openExternal: (url: string) => ipcRenderer.invoke("comfy:open-external", url),

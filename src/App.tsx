@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, SyntheticEvent } from "react";
 import {
+  addCollectionRecord,
   addCollectionWithImages,
   addImagesToCollection,
   addFavorites,
@@ -21,6 +22,7 @@ import { formatBytes } from "./lib/formatBytes";
 import { toComfyUrl } from "./lib/fileUrl";
 import { AboutDialog, ABOUT_GRAPHIC_PUBLIC_PATH } from "./components/AboutDialog";
 import { BulkRenameModal } from "./components/BulkRenameModal";
+import { MoveFilesModal } from "./components/MoveFilesModal";
 import { CollectionSidebar } from "./components/CollectionSidebar";
 import { ImageGrid } from "./components/ImageGrid";
 import { ImageViewer } from "./components/ImageViewer";
@@ -289,6 +291,10 @@ export default function App() {
   const [bulkRenameDigits, setBulkRenameDigits] = useState(3);
   const [bulkRenaming, setBulkRenaming] = useState(false);
   const [bulkRenameError, setBulkRenameError] = useState<string | null>(null);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moveDestination, setMoveDestination] = useState("");
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
   const handleBulkRenameBaseChange = useCallback((value: string) => {
     setBulkRenameBase(value);
   }, []);
@@ -417,6 +423,20 @@ export default function App() {
     const imageLabel = imagesAdded === 1 ? "image" : "images";
     return `${status} — added ${collectionsAdded} ${collectionLabel}, ${imagesAdded} ${imageLabel}`;
   };
+
+  const normalizeForComparison = (value: string) => {
+    if (!value) return value;
+    let normalized = value;
+    while (normalized.length > 1 && (normalized.endsWith("/") || normalized.endsWith("\\"))) {
+      normalized = normalized.slice(0, -1);
+    }
+    if (/^[A-Za-z]:$/.test(normalized)) {
+      return `${normalized}\\`;
+    }
+    return normalized;
+  };
+
+  const pathsAreEquivalent = (a: string, b: string) => normalizeForComparison(a) === normalizeForComparison(b);
 
   const runRemovalWorker = useCallback(
     (
@@ -891,6 +911,21 @@ export default function App() {
       .filter((entry): entry is { id: string; fileName: string; nextName: string } => Boolean(entry));
   }, [selectedOrderedImages, bulkRenameBase, bulkRenameDigits, deriveBulkRenameBase]);
   const bulkRenameAdditionalCount = Math.max(0, selectedOrderedImages.length - bulkRenamePreviewEntries.length);
+  const movePreviewEntries = useMemo(() => {
+    const previewLimit = Math.min(selectedOrderedImages.length, 8);
+    return selectedOrderedImages.slice(0, previewLimit).map((image) => ({
+      id: image.id,
+      fileName: image.fileName,
+      filePath: image.filePath,
+    }));
+  }, [selectedOrderedImages]);
+  const movePreviewAdditionalCount = Math.max(0, selectedOrderedImages.length - movePreviewEntries.length);
+  const trimmedMoveDestination = moveDestination.trim();
+  const moveWillChange = Boolean(
+    trimmedMoveDestination &&
+      selectedOrderedImages.some((image) => joinPath(trimmedMoveDestination, image.fileName) !== image.filePath)
+  );
+  const moveReady = Boolean(trimmedMoveDestination && moveWillChange);
 
   const collectionIdForNav =
     activeTab.type === "image"
@@ -1897,6 +1932,28 @@ export default function App() {
     }
   };
 
+  const removeMissingImages = async (imagesToCheck: IndexedImage[]) => {
+    if (!imagesToCheck.length || !bridgeAvailable || !window.comfy?.findMissingFiles) {
+      return new Set<string>();
+    }
+    try {
+      const missingPaths = await window.comfy.findMissingFiles(imagesToCheck.map((image) => image.filePath));
+      if (!missingPaths.length) {
+        return new Set<string>();
+      }
+      const missingPathSet = new Set(missingPaths);
+      const missingIds = imagesToCheck
+        .filter((image) => missingPathSet.has(image.filePath))
+        .map((image) => image.id);
+      if (missingIds.length) {
+        await handleRemoveImages(missingIds, { confirm: false });
+      }
+      return missingPathSet;
+    } catch {
+      return new Set<string>();
+    }
+  };
+
   function startRenameImage(image: IndexedImage) {
     setRenameState({ type: "image", id: image.id, value: image.fileName });
   }
@@ -2143,6 +2200,202 @@ export default function App() {
       setBulkRenameOpen(false);
     }
   }, [bulkRenameOpen, selectedOrderedImages.length]);
+
+  const handleOpenMove = useCallback(() => {
+    if (selectedOrderedImages.length === 0) return;
+    setMoveError(null);
+    setMoveDestination(getParentPath(selectedOrderedImages[0].filePath));
+    setMoveOpen(true);
+  }, [selectedOrderedImages]);
+
+  const handlePickMoveDestination = useCallback(async () => {
+    if (!bridgeAvailable || !window.comfy?.selectFolders) return;
+    try {
+      const choices = await window.comfy.selectFolders();
+      if (choices.length > 0) {
+        setMoveDestination(choices[0]);
+      }
+    } catch {
+      // ignore user cancellation or errors
+    }
+  }, [bridgeAvailable]);
+
+  const handleMoveCancel = useCallback(() => {
+    setMoveOpen(false);
+    setMoveError(null);
+  }, []);
+
+  const handleMove = useCallback(async () => {
+    if (!window.comfy?.renamePath || !window.comfy?.findMissingFiles) {
+      setMoveError("Bridge unavailable");
+      return;
+    }
+    if (selectedOrderedImages.length === 0) return;
+    const destination = moveDestination.trim();
+    if (!destination) {
+      setMoveError("Enter a destination path");
+      return;
+    }
+    const shouldMove = selectedOrderedImages.some(
+      (image) => joinPath(destination, image.fileName) !== image.filePath
+    );
+    if (!shouldMove) {
+      setMoveError("Destination is the same as the current folder");
+      return;
+    }
+    const targetPaths = selectedOrderedImages.map((image) => joinPath(destination, image.fileName));
+    let conflictingPaths: string[] = [];
+    try {
+      const missingPaths = await window.comfy.findMissingFiles(targetPaths);
+      const missingSet = new Set(missingPaths);
+      conflictingPaths = targetPaths.filter((path) => !missingSet.has(path));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to inspect destination";
+      setMoveError(message);
+      setToastMessage(message);
+      setLastCopied(message);
+      return;
+    }
+    let shouldOverwrite = false;
+    if (conflictingPaths.length > 0) {
+      const preview = conflictingPaths.slice(0, 3).map((path) => `• ${path}`).join("\n");
+      const extra = conflictingPaths.length > 3 ? `\n...and ${conflictingPaths.length - 3} more file(s)` : "";
+      const confirmed = window.confirm(
+        `The following file(s) already exist:\n${preview}${extra}\n\nOverwrite them and replace the files?`
+      );
+      if (!confirmed) {
+        const message = "Move canceled";
+        setMoveError(message);
+        setLastCopied(message);
+        return;
+      }
+      shouldOverwrite = true;
+    }
+    setMoving(true);
+    setMoveError(null);
+    try {
+      if (window.comfy?.ensureDirectory) {
+        try {
+          await window.comfy.ensureDirectory(destination);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to prepare destination";
+          setMoveError(message);
+          setToastMessage(message);
+          setLastCopied(message);
+          return;
+        }
+      }
+      const moveResults: Array<{ id: string; fileName: string; filePath: string }> = [];
+      for (const image of selectedOrderedImages) {
+        const targetPath = joinPath(destination, image.fileName);
+        if (targetPath === image.filePath) {
+          moveResults.push({ id: image.id, fileName: image.fileName, filePath: image.filePath });
+          continue;
+        }
+        const result = await window.comfy.renamePath({
+          oldPath: image.filePath,
+          newPath: targetPath,
+          kind: "file",
+          overwrite: shouldOverwrite,
+        });
+        if (!result?.success) {
+          const message = result?.message ?? "Failed to move files";
+          setMoveError(message);
+          setToastMessage(message);
+          setLastCopied(message);
+          return;
+        }
+        moveResults.push({ id: image.id, fileName: image.fileName, filePath: targetPath });
+      }
+      if (moveResults.length === 0) {
+        setToastMessage("No files were moved");
+        setLastCopied("No files were moved");
+        return;
+      }
+      let finalCollection = collections.find((collection) => pathsAreEquivalent(collection.rootPath, destination));
+      if (!finalCollection) {
+        const created = await addCollectionRecord(destination);
+        finalCollection = created;
+        setCollections((prev) => [...prev, created]);
+      }
+      const targetCollectionId = finalCollection.id;
+      const moveMap = new Map(
+        moveResults.map((entry) => [entry.id, { ...entry, collectionId: targetCollectionId }])
+      );
+      await Promise.all(
+        moveResults.map((entry) => updateImageFileInfo(entry.id, entry.filePath, entry.fileName, targetCollectionId))
+      );
+      setImages((prev) =>
+        prev.map((image) => {
+          const update = moveMap.get(image.id);
+          if (!update) return image;
+          return {
+            ...image,
+            filePath: update.filePath,
+            fileUrl: update.filePath,
+            collectionId: update.collectionId,
+          };
+        })
+      );
+      setTabs((prev) =>
+        prev.map((tab) => {
+          if (tab.type !== "image") return tab;
+          const update = moveMap.get(tab.image.id);
+          if (!update) return tab;
+          return {
+            ...tab,
+            image: {
+              ...tab.image,
+              filePath: update.filePath,
+              fileUrl: update.filePath,
+              collectionId: update.collectionId,
+            },
+          };
+        })
+      );
+      setActiveTab((current) => {
+        if (current.type !== "image") return current;
+        const update = moveMap.get(current.image.id);
+        if (!update) return current;
+        return {
+          ...current,
+          image: {
+            ...current.image,
+            filePath: update.filePath,
+            fileUrl: update.filePath,
+            collectionId: update.collectionId,
+          },
+        };
+      });
+      const movedIds = moveResults.map((entry) => entry.id);
+      removeThumbnailEntries(movedIds);
+      const hydrated = moveResults
+        .map((entry) => {
+          const original = imageById.get(entry.id);
+          if (!original) return null;
+          return {
+            ...original,
+            filePath: entry.filePath,
+            fileUrl: entry.filePath,
+            collectionId: targetCollectionId,
+          };
+        })
+        .filter((entry): entry is IndexedImage => Boolean(entry));
+      hydrateFileUrls(hydrated);
+      const successMessage = `Moved ${movedIds.length} file${movedIds.length === 1 ? "" : "s"} to ${destination}`;
+      setToastMessage(successMessage);
+      setLastCopied(successMessage);
+      setMoveOpen(false);
+    } finally {
+      setMoving(false);
+    }
+  }, [collections, hydrateFileUrls, imageById, moveDestination, removeThumbnailEntries, selectedOrderedImages, setCollections, setLastCopied, setToastMessage]);
+
+  useEffect(() => {
+    if (moveOpen && selectedOrderedImages.length === 0) {
+      setMoveOpen(false);
+    }
+  }, [moveOpen, selectedOrderedImages.length]);
 
   const handleRemoveSelected = async () => {
     if (selectedIds.size === 0) return;
@@ -2465,16 +2718,7 @@ export default function App() {
       const targetImageList = images.filter((image) =>
         targets.some((collection) => collection.id === image.collectionId)
       );
-      const missingPaths = window.comfy?.findMissingFiles
-        ? await window.comfy.findMissingFiles(targetImageList.map((image) => image.filePath))
-        : [];
-      const missingPathSet = new Set(missingPaths);
-      if (missingPathSet.size > 0) {
-        const missingIds = targetImageList
-          .filter((image) => missingPathSet.has(image.filePath))
-          .map((image) => image.id);
-        await handleRemoveImages(missingIds, { confirm: false });
-      }
+      const missingPathSet = await removeMissingImages(targetImageList);
       const rootPaths = targets.map((collection) => collection.rootPath);
       const imagesForIndex = missingPathSet.size > 0
         ? images.filter((image) => !missingPathSet.has(image.filePath))
@@ -2549,6 +2793,7 @@ export default function App() {
     handleOpenInEditor,
     handleDeleteImagesFromDisk,
     handleOpenBulkRename,
+  handleOpenMove,
     handleRescanCollections,
     handleRemoveSelectedCollections,
     handleDeleteSelectedCollectionsFromDisk,
@@ -2598,16 +2843,7 @@ export default function App() {
       );
       const affectedCollectionIds = new Set(affectedCollections.map((collection) => collection.id));
       const affectedImages = images.filter((image) => affectedCollectionIds.has(image.collectionId));
-      const missingPaths = window.comfy?.findMissingFiles
-        ? await window.comfy.findMissingFiles(affectedImages.map((image) => image.filePath))
-        : [];
-      const missingPathSet = new Set(missingPaths);
-      if (missingPathSet.size > 0) {
-        const missingIds = affectedImages
-          .filter((image) => missingPathSet.has(image.filePath))
-          .map((image) => image.id);
-        await handleRemoveImages(missingIds, { confirm: false });
-      }
+      const missingPathSet = await removeMissingImages(affectedImages);
       const imagesForIndex = missingPathSet.size > 0
         ? images.filter((image) => !missingPathSet.has(image.filePath))
         : images;
@@ -3044,6 +3280,7 @@ export default function App() {
         handleCloseOtherTabs={handleCloseOtherTabs}
         handleCloseAllTabs={handleCloseAllTabs}
         handleOpenBulkRename={handleOpenBulkRename}
+        handleOpenMove={handleOpenMove}
         setAboutOpen={setAboutOpen}
       />
       <BulkRenameModal
@@ -3059,6 +3296,20 @@ export default function App() {
         onDigitsChange={handleBulkRenameDigitsChange}
         onCancel={handleBulkRenameCancel}
         onRename={handleBulkRename}
+      />
+      <MoveFilesModal
+        open={moveOpen}
+        fileCount={selectedOrderedImages.length}
+        destination={moveDestination}
+        moving={moving}
+        disabled={!moveReady}
+        error={moveError}
+        previewEntries={movePreviewEntries}
+        additionalCount={movePreviewAdditionalCount}
+        onDestinationChange={setMoveDestination}
+        onCancel={handleMoveCancel}
+        onMove={handleMove}
+        onPickDestination={handlePickMoveDestination}
       />
 
       <div className="flex flex-1 overflow-hidden">
