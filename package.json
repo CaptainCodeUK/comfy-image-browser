@@ -5,15 +5,18 @@
   "version": "0.1.0",
   "main": "electron-dist/electron/main.js",
   "scripts": {
-  "dev": "npm run build:electron && concurrently --kill-others --success=first \"npm:dev:app\" \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev": "npm run build:electron && concurrently --kill-others --success=first \"npm:dev:app\" \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:renderer": "vite",
+    "predev:electron": "npm run copy:electron-assets",
     "dev:electron": "tsc -w -p electron/tsconfig.json",
     "dev:app": "wait-on http://localhost:5173 && VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
     "build": "npm run build:renderer && npm run build:electron",
     "build:renderer": "vite build",
+    "prebuild:electron": "npm run copy:electron-assets",
     "build:electron": "tsc -p electron/tsconfig.json",
     "preview": "vite preview",
-    "test": "vitest run --environment node"
+    "test": "vitest run --environment node",
+    "copy:electron-assets": "node ./scripts/copy-electron-assets.js"
   },
   "dependencies": {
     "idb": "^8.0.0",

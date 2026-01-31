@@ -12,6 +12,7 @@ import {
 } from "electron";
 import path from "node:path";
 import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 import { parsePngMetadata, readPngDimensions, type ParsedPngMetadata } from "../src/lib/pngMetadata";
 
@@ -25,6 +26,31 @@ const THUMBNAIL_DIR = ".thumbs";
 const THUMBNAIL_SIZE = 320;
 const PREVIEW_MAX_SIZE = 1600;
 const THUMBNAIL_QUEUE_DELAY_MS = 10;
+const RELEASES_URL = "https://github.com/CaptainCodeUK/comfy-image-browser/releases";
+
+const ICON_NAME_ALIASES: Record<string, string[]> = {
+    win32: ["app-icon.ico", "app-icon.png"],
+    darwin: ["app-icon.icns", "app-icon.png"],
+    linux: ["app-icon.png"],
+};
+
+const AVAILABLE_ICON_NAMES = ICON_NAME_ALIASES[process.platform] ?? ICON_NAME_ALIASES.linux;
+
+const getIconSearchPaths = (iconName: string) => [
+    path.join(__dirname, "..", "icons", iconName),
+    path.join(__dirname, "../../dist", "icons", iconName),
+];
+
+const resolveAppIconPath = () => {
+    for (const iconName of AVAILABLE_ICON_NAMES) {
+        for (const candidate of getIconSearchPaths(iconName)) {
+            if (existsSync(candidate)) {
+                return candidate;
+            }
+        }
+    }
+    return null;
+};
 
 const thumbnailQueue: string[] = [];
 const thumbnailInFlight = new Set<string>();
@@ -106,6 +132,10 @@ const persistWindowState = async (window: BrowserWindow) => {
 
 const createWindow = async () => {
     const previousState = await readWindowState();
+    const iconPath = resolveAppIconPath();
+    const nativeAppIcon = iconPath ? nativeImage.createFromPath(iconPath) : null;
+    const hasAppIcon = Boolean(nativeAppIcon && !nativeAppIcon.isEmpty());
+    const windowIconPath = hasAppIcon ? iconPath! : undefined;
     const mainWindow = new BrowserWindow({
         width: previousState?.width ?? 1400,
         height: previousState?.height ?? 900,
@@ -116,10 +146,15 @@ const createWindow = async () => {
             contextIsolation: true,
             preload: path.join(__dirname, "preload.js"),
         },
+        icon: windowIconPath,
     });
 
     if (previousState?.isMaximized) {
         mainWindow.maximize();
+    }
+
+    if (process.platform === "darwin" && hasAppIcon && nativeAppIcon) {
+        app.dock.setIcon(nativeAppIcon);
     }
 
     let saveTimeout: NodeJS.Timeout | null = null;
@@ -449,6 +484,29 @@ const applyContentSecurityPolicy = () => {
         });
     });
 };
+
+ipcMain.handle("comfy:get-latest-release", async () => {
+    try {
+        const response = await fetch("https://api.github.com/repos/CaptainCodeUK/comfy-image-browser/releases/latest", {
+            headers: { Accept: "application/vnd.github+json" },
+        });
+        if (!response.ok) {
+            throw new Error(`GitHub API responded with ${response.status}`);
+        }
+        const payload = await response.json();
+        const tagName = typeof payload.tag_name === "string" ? payload.tag_name : payload.name;
+        if (!tagName) {
+            throw new Error("Malformed release data");
+        }
+        return {
+            version: tagName,
+            url: payload.html_url ?? RELEASES_URL,
+        };
+    } catch (error) {
+        console.warn("[comfy-browser] failed to fetch release info", error);
+        throw error instanceof Error ? error : new Error("Failed to fetch release info");
+    }
+});
 
 app.whenReady().then(async () => {
     if (process.env.VITE_DEV_SERVER_URL) {

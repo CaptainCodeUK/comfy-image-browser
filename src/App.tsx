@@ -19,6 +19,7 @@ import type { Collection, IndexedImage, IndexedImagePayload } from "./lib/types"
 import { sortCollections } from "./lib/collectionSort";
 import { formatBytes } from "./lib/formatBytes";
 import { toComfyUrl } from "./lib/fileUrl";
+import { AboutDialog, ABOUT_GRAPHIC_PUBLIC_PATH } from "./components/AboutDialog";
 import { BulkRenameModal } from "./components/BulkRenameModal";
 import { CollectionSidebar } from "./components/CollectionSidebar";
 import { ImageGrid } from "./components/ImageGrid";
@@ -2992,35 +2993,12 @@ export default function App() {
           {bridgeError}
         </div>
       ) : null}
-      {aboutOpen ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/70">
-          <div className="pointer-events-auto w-full max-w-md rounded-2xl border border-slate-800 bg-slate-950/90 px-6 py-5 text-sm text-slate-100 shadow-xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold">{appInfo?.name ?? "Comfy Image Browser"}</div>
-                <div className="mt-1 text-xs text-slate-400">Version {appInfo?.version ?? "—"}</div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAboutOpen(false)}
-                className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-slate-500"
-              >
-                Close
-              </button>
-            </div>
-            <div className="mt-4 space-y-2 text-sm text-slate-300">
-              <p>Thanks for using Comfy Image Browser! If you’d like to support development, consider buying me a cup of coffee, over on Ko‑Fi.</p>
-              <button
-                type="button"
-                onClick={() => window.comfy?.openExternal("https://ko-fi.com/captaincodeuk")}
-                className="inline-flex items-center gap-2 rounded-md border border-amber-400/70 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 hover:border-amber-300"
-              >
-                ☕ Ko‑Fi
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <AboutDialog
+        open={aboutOpen}
+        appInfo={appInfo}
+        graphicUrl={ABOUT_GRAPHIC_PUBLIC_PATH}
+        onClose={() => setAboutOpen(false)}
+      />
       <MenuActionBridge
         bridgeAvailable={bridgeAvailable}
         favoritesId={FAVORITES_ID}

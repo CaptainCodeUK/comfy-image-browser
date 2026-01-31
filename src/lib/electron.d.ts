@@ -57,6 +57,7 @@ declare global {
         message?: string;
       }>;
       getAppInfo: () => Promise<{ name: string; version: string }>;
+  getLatestRelease: () => Promise<{ version: string; url: string }>;
       openExternal: (url: string) => Promise<boolean>;
   toggleDevTools: () => Promise<boolean>;
       updateMenuState: (state: {

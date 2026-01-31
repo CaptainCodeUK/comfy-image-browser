@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld("comfy", {
   renamePath: (payload: { oldPath: string; newPath: string; kind: "file" | "folder" }) =>
     ipcRenderer.invoke("comfy:rename-path", payload),
   getAppInfo: () => ipcRenderer.invoke("comfy:get-app-info"),
+  getLatestRelease: () => ipcRenderer.invoke("comfy:get-latest-release"),
   openExternal: (url: string) => ipcRenderer.invoke("comfy:open-external", url),
   toggleDevTools: () => ipcRenderer.invoke("comfy:toggle-devtools"),
   updateMenuState: (state: {
