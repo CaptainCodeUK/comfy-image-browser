@@ -369,7 +369,7 @@ export function CollectionSidebar({
                           renameCancelRef.current = false;
                           return;
                         }
-                        void commitRename();
+                        cancelRename();
                       }}
                       className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100"
                       aria-label="Rename collection"

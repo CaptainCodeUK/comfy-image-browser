@@ -1412,6 +1412,7 @@ export default function App() {
 
   const handleImageClick = useCallback(
     (image: IndexedImage, absoluteIndex: number, event: MouseEvent<HTMLButtonElement>) => {
+      cancelRename();
       const isMeta = event.metaKey || event.ctrlKey;
       if (event.shiftKey && filteredImageCount > 0) {
         const anchor = selectionAnchor ?? absoluteIndex;
@@ -1954,6 +1955,33 @@ export default function App() {
     }
   };
 
+  const findExistingPaths = useCallback(
+    async (paths: string[]) => {
+      if (!paths.length || !bridgeAvailable || !window.comfy?.findMissingFiles) {
+        return [] as string[];
+      }
+      try {
+        const missingPaths = await window.comfy.findMissingFiles(paths);
+        const missingSet = new Set(missingPaths);
+        return paths.filter((path) => !missingSet.has(path));
+      } catch {
+        return [] as string[];
+      }
+    },
+    [bridgeAvailable]
+  );
+
+  const buildConflictPreview = (paths: string[]) => {
+    const preview = paths.slice(0, 3).map((path) => `• ${path}`).join("\n");
+    const remainder = paths.length > 3 ? `\n...and ${paths.length - 3} more file(s)` : "";
+    return `${preview}${remainder}`;
+  };
+
+  const confirmOverwritePaths = (paths: string[], label: string) => {
+    const message = `The following ${label} already exist:\n${buildConflictPreview(paths)}\n\nOverwrite and replace them?`;
+    return window.confirm(message);
+  };
+
   function startRenameImage(image: IndexedImage) {
     setRenameState({ type: "image", id: image.id, value: image.fileName });
   }
@@ -1962,7 +1990,24 @@ export default function App() {
     setRenameState({ type: "collection", id: collection.id, value: collection.name });
   }
 
-  function cancelRename() {
+  const attemptBlurRenameInput = () => {
+    const input = renameInputRef.current;
+    if (!input) return false;
+    renameCancelRef.current = true;
+    input.blur();
+    window.setTimeout(() => {
+      if (renameCancelRef.current) {
+        renameCancelRef.current = false;
+      }
+    }, 0);
+    return true;
+  };
+
+  function cancelRename(options?: { preserveCancelFlag?: boolean }) {
+    if (!options?.preserveCancelFlag) {
+      renameCancelRef.current = false;
+    }
+    renameTargetRef.current = null;
     setRenameState(null);
   }
 
@@ -1994,7 +2039,25 @@ export default function App() {
       }
       const parentPath = getParentPath(image.filePath);
       const newPath = joinPath(parentPath, fileName);
-      const result = await window.comfy.renamePath({ oldPath: image.filePath, newPath, kind: "file" });
+      const conflictingPaths = await findExistingPaths([newPath]);
+      let shouldOverwrite = false;
+      if (conflictingPaths.length > 0) {
+        const confirmed = confirmOverwritePaths(conflictingPaths, "file");
+        if (!confirmed) {
+          setToastMessage("Rename canceled");
+          setLastCopied("Rename canceled");
+          const blurred = attemptBlurRenameInput();
+          cancelRename(blurred ? { preserveCancelFlag: true } : undefined);
+          return;
+        }
+        shouldOverwrite = true;
+      }
+      const result = await window.comfy.renamePath({
+        oldPath: image.filePath,
+        newPath,
+        kind: "file",
+        overwrite: shouldOverwrite,
+      });
       if (!result?.success) {
         setToastMessage(result?.message ?? "Failed to rename image");
         setLastCopied(result?.message ?? "Failed to rename image");
@@ -2116,6 +2179,8 @@ export default function App() {
     setBulkRenameError(null);
     try {
       const renameResults: Array<{ id: string; fileName: string; filePath: string }> = [];
+      type BulkPlan = { image: IndexedImage; nextName: string; newPath: string };
+      const plans: BulkPlan[] = [];
       for (let index = 0; index < selectedOrderedImages.length; index += 1) {
         const image = selectedOrderedImages[index];
         const nextName = formatBulkRenameName(image, baseName, digits, index);
@@ -2125,7 +2190,31 @@ export default function App() {
         }
         const parentPath = getParentPath(image.filePath);
         const newPath = joinPath(parentPath, nextName);
-        const result = await window.comfy.renamePath({ oldPath: image.filePath, newPath, kind: "file" });
+        plans.push({ image, nextName, newPath });
+      }
+      const renamePaths = plans.map((entry) => entry.newPath);
+      const conflictingPaths = await findExistingPaths(renamePaths);
+      let shouldOverwrite = false;
+      if (conflictingPaths.length > 0) {
+        const label = conflictingPaths.length === 1 ? "file" : "files";
+        const confirmed = confirmOverwritePaths(conflictingPaths, label);
+        if (!confirmed) {
+          const message = "Rename canceled";
+          setBulkRenameError(message);
+          setToastMessage(message);
+          setLastCopied(message);
+          return;
+        }
+        shouldOverwrite = true;
+      }
+      for (const plan of plans) {
+        const { image, nextName, newPath } = plan;
+        const result = await window.comfy.renamePath({
+          oldPath: image.filePath,
+          newPath,
+          kind: "file",
+          overwrite: shouldOverwrite,
+        });
         if (!result?.success) {
           const message = result?.message ?? "Failed to rename files";
           setBulkRenameError(message);
@@ -2193,7 +2282,7 @@ export default function App() {
     } finally {
       setBulkRenaming(false);
     }
-  }, [bulkRenameBase, bulkRenameDigits, hydrateFileUrls, removeThumbnailEntries, selectedOrderedImages, setToastMessage, setLastCopied]);
+  }, [bulkRenameBase, bulkRenameDigits, findExistingPaths, hydrateFileUrls, removeThumbnailEntries, selectedOrderedImages, setToastMessage, setLastCopied]);
 
   useEffect(() => {
     if (bulkRenameOpen && selectedOrderedImages.length === 0) {
