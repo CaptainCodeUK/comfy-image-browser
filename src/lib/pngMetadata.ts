@@ -68,6 +68,69 @@ const parseITXtChunk = (data: Buffer) => {
   return null;
 };
 
+const parseParametersChunk = (value: string) => {
+  const lines = value
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.replace(/\u0000/g, ""))
+    .map((line) => line.trim());
+  const promptLines: string[] = [];
+  const metadataLines: string[] = [];
+  let metadataMode = false;
+
+  const isMetadataTrigger = (line: string) =>
+    line.startsWith("<lora") || line.startsWith("Steps:") || line.startsWith("Sampler:") || line.startsWith("Seed:");
+
+  for (const line of lines) {
+    if (!line) {
+      if (promptLines.length > 0) {
+        metadataMode = true;
+      }
+      continue;
+    }
+    if (!metadataMode && isMetadataTrigger(line)) {
+      metadataMode = true;
+    }
+    if (metadataMode) {
+      metadataLines.push(line);
+    } else {
+      promptLines.push(line);
+    }
+  }
+
+  const prompt = promptLines.join(" ").trim();
+  const metadata: Record<string, string> = {};
+
+  for (const line of metadataLines) {
+    if (line.includes("<lora")) {
+      if (metadata.loras) {
+        metadata.loras = `${metadata.loras}\n${line}`;
+      } else {
+        metadata.loras = line;
+      }
+      continue;
+    }
+    const fragments = line
+      .split(",")
+      .map((fragment) => fragment.trim())
+      .filter((fragment) => fragment.length > 0);
+    for (const fragment of fragments) {
+      const colonIndex = fragment.indexOf(":");
+      if (colonIndex === -1) {
+        continue;
+      }
+      const key = fragment.slice(0, colonIndex).trim();
+      const rawValue = fragment.slice(colonIndex + 1).trim();
+      const value = rawValue.replace(/^"/, "").replace(/"$/, "");
+      if (key) {
+        metadata[key] = value;
+      }
+    }
+  }
+
+  return { prompt: prompt || null, metadata };
+};
+
 export const parsePngMetadata = (buffer: Buffer): ParsedPngMetadata => {
   const textChunks: Record<string, string> = {};
   const jsonChunks: Record<string, unknown> = {};
@@ -105,6 +168,17 @@ export const parsePngMetadata = (buffer: Buffer): ParsedPngMetadata => {
       jsonChunks[key] = JSON.parse(value);
     } catch {
       // ignore non-JSON metadata
+    }
+  }
+
+  const parametersText = textChunks.parameters;
+  if (parametersText) {
+    const parsed = parseParametersChunk(parametersText);
+    if (parsed.prompt && !textChunks.prompt) {
+      textChunks.prompt = parsed.prompt;
+    }
+    if (Object.keys(parsed.metadata).length > 0) {
+      jsonChunks.parameters = parsed.metadata;
     }
   }
 

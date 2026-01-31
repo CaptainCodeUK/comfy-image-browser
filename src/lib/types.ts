@@ -3,6 +3,7 @@ export type Collection = {
   name: string;
   rootPath: string;
   addedAt: string;
+  includeSubfolders?: boolean;
 };
 
 export type IndexedImagePayload = {

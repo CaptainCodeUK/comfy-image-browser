@@ -206,6 +206,25 @@ export function ImageViewer({
                     </button>
                   </div>
                 ) : null}
+                {metadataSummary.parametersText ? (
+                  <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
+                    <div className="break-words text-slate-400">Parameters</div>
+                    <div className="break-words text-slate-100 whitespace-pre-line">
+                      {metadataSummary.parametersText}
+                    </div>
+                    <button
+                      onClick={() => copyToClipboard(metadataSummary.parametersText ?? "", "Parameters")}
+                      className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${lastCopied === "Parameters"
+                        ? "border-indigo-400 bg-indigo-500/20"
+                        : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
+                        }`}
+                      aria-label="Copy parameters"
+                      title="Copy parameters"
+                    >
+                      ⧉
+                    </button>
+                  </div>
+                ) : null}
                 {metadataSummary.width && metadataSummary.height ? (
                   <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
                     <div className="break-words text-slate-400">Resolution</div>

@@ -20,4 +20,5 @@ export type MetadataSummary = {
 	checkpoint: string | null;
 	seed: string | null;
 	loras: Array<{ name: string; strength?: number }>;
+	parametersText: string | null;
 };

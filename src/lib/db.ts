@@ -72,12 +72,13 @@ export const addCollectionWithImages = async (rootPath: string, payloads: Indexe
   return { collection, images };
 };
 
-export const addCollectionRecord = async (rootPath: string) => {
+export const addCollectionRecord = async (rootPath: string, includeSubfolders = false) => {
   const collection: Collection = {
     id: crypto.randomUUID(),
     name: createCollectionName(rootPath),
     rootPath,
     addedAt: new Date().toISOString(),
+    ...(includeSubfolders ? { includeSubfolders: true } : {}),
   };
   const db = await dbPromise;
   await db.put("collections", collection);

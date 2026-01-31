@@ -217,6 +217,8 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
     }, new Map<string, { name: string; strength?: number }>())
   ).map((entry) => entry[1]);
 
+  const parametersText = metadata.parameters ?? null;
+
   return {
     promptText,
     width,
@@ -225,6 +227,7 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
     checkpoint,
     seed,
     loras: uniqueLoras,
+    parametersText,
   };
 };
 
@@ -801,11 +804,19 @@ export default function App() {
   const sortedFilteredImages = useMemo(() => {
     const start = performance.now();
     const query = search.trim().toLowerCase();
+    const activeCollectionRecord =
+      activeCollection !== "all" && activeCollection !== FAVORITES_ID
+        ? collectionById.get(activeCollection)
+        : null;
     const visible = images.filter((image) => {
       if (activeCollection === FAVORITES_ID && !favoriteIds.has(image.id)) {
         return false;
       }
-      if (
+      if (activeCollectionRecord?.includeSubfolders) {
+        if (!isPathWithinRoot(image.filePath, activeCollectionRecord.rootPath)) {
+          return false;
+        }
+      } else if (
         activeCollection !== "all" &&
         activeCollection !== FAVORITES_ID &&
         image.collectionId !== activeCollection
@@ -2425,6 +2436,12 @@ export default function App() {
         finalCollection = created;
         setCollections((prev) => [...prev, created]);
       }
+      if (finalCollection) {
+        setActiveCollection(finalCollection.id);
+        setSelectedCollectionIds(new Set([finalCollection.id]));
+        setCollectionFocusedId(finalCollection.id);
+        setCollectionSelectionAnchor(null);
+      }
       const targetCollectionId = finalCollection.id;
       const moveMap = new Map(
         moveResults.map((entry) => [entry.id, { ...entry, collectionId: targetCollectionId }])
@@ -2500,7 +2517,22 @@ export default function App() {
     } finally {
       setMoving(false);
     }
-  }, [buildConflictPreview, collections, hydrateFileUrls, imageById, moveDestination, removeThumbnailEntries, selectedOrderedImages, setCollections, setLastCopied, setToastMessage]);
+  }, [
+    buildConflictPreview,
+    collections,
+    hydrateFileUrls,
+    imageById,
+    moveDestination,
+    removeThumbnailEntries,
+    selectedOrderedImages,
+    setCollections,
+    setLastCopied,
+    setToastMessage,
+    setActiveCollection,
+    setSelectedCollectionIds,
+    setCollectionFocusedId,
+    setCollectionSelectionAnchor,
+  ]);
 
   useEffect(() => {
     if (moveOpen && selectedOrderedImages.length === 0) {
@@ -3007,6 +3039,42 @@ export default function App() {
         }
       }
 
+      const normalizedCollectionMap = new Map(
+        [...collections, ...newCollections].map((collection) => [normalizeForComparison(collection.rootPath), collection])
+      );
+      const updatedCollections: Collection[] = [];
+      const aggregatorAdditions: Collection[] = [];
+
+      for (const rootPath of uniquePaths) {
+        const normalizedRoot = normalizeForComparison(rootPath);
+        const hasExistingImages = images.some((image) => isPathWithinRoot(image.filePath, rootPath));
+        const hasNewImages = payload.some((item) => isPathWithinRoot(item.rootPath, rootPath));
+        if (!hasExistingImages && !hasNewImages) {
+          continue;
+        }
+        const existing = normalizedCollectionMap.get(normalizedRoot);
+        if (existing) {
+          if (existing.includeSubfolders) {
+            continue;
+          }
+          const updated = await updateCollectionInfo(existing.id, { includeSubfolders: true });
+          if (updated) {
+            updatedCollections.push(updated);
+            normalizedCollectionMap.set(normalizedRoot, updated);
+          }
+          continue;
+        }
+        const aggregator = await addCollectionRecord(rootPath, true);
+        aggregatorAdditions.push(aggregator);
+        normalizedCollectionMap.set(normalizedRoot, aggregator);
+      }
+
+      if (aggregatorAdditions.length > 0) {
+        newCollections.push(...aggregatorAdditions);
+      }
+
+      const updatedCollectionsById = new Map(updatedCollections.map((collection) => [collection.id, collection]));
+
       const liveAddedImages = liveIndexRef.current?.addedPaths.size ?? 0;
       const liveAddedCollections = liveIndexRef.current?.addedCollectionRoots.size ?? 0;
       const totalImages = liveAddedImages + newImages.length;
@@ -3015,8 +3083,11 @@ export default function App() {
       setToastMessage(summary);
       setLastCopied(summary);
 
-      if (newCollections.length > 0) {
-        setCollections((prev) => [...prev, ...newCollections]);
+      if (newCollections.length > 0 || updatedCollectionsById.size > 0) {
+        setCollections((prev) => {
+          const mapped = prev.map((collection) => updatedCollectionsById.get(collection.id) ?? collection);
+          return newCollections.length > 0 ? [...mapped, ...newCollections] : mapped;
+        });
       }
       if (newImages.length > 0) {
         const baseImages = newImages.map((image) => ({ ...image, fileUrl: image.filePath }));
