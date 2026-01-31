@@ -994,6 +994,35 @@ ipcMain.handle(
     }
 );
 
+const formatConflictPreview = (paths: string[]) => {
+    const preview = paths.slice(0, 3).map((path) => `• ${path}`).join("\n");
+    const extra = paths.length > 3 ? `\n...and ${paths.length - 3} more file(s)` : "";
+    return `${preview}${extra}`;
+};
+
+ipcMain.handle("comfy:confirm-move-overwrite", (_event: IpcMainInvokeEvent, paths: string[]) => {
+    if (!Array.isArray(paths) || paths.length === 0) {
+        return "cancel" as const;
+    }
+    const target = BrowserWindow.fromWebContents(_event.sender) ?? BrowserWindow.getAllWindows()[0];
+    const detail = `The following file(s) already exist:\n${formatConflictPreview(paths)}\n\nWhat would you like to do?`;
+    return dialog
+        .showMessageBox(target, {
+            type: "warning",
+            buttons: ["Cancel", "Overwrite None", "Overwrite All"],
+            defaultId: 2,
+            cancelId: 0,
+            message: "Files already exist in the destination",
+            detail,
+        })
+        .then((result) => {
+            return (result.response === 1 ? "none" : result.response === 2 ? "all" : "cancel") as
+                | "cancel"
+                | "none"
+                | "all";
+        });
+});
+
 ipcMain.handle("comfy:ensure-directory", async (_event: IpcMainInvokeEvent, dirPath: string) => {
     if (!dirPath) return false;
     try {

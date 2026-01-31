@@ -53,6 +53,7 @@ declare global {
       revealInFolder: (filePath: string) => Promise<void>;
       openInEditor: (filePath: string) => Promise<void>;
       findMissingFiles: (paths: string[]) => Promise<string[]>;
+      confirmMoveOverwrite: (paths: string[]) => Promise<"cancel" | "none" | "all">;
   renamePath: (payload: { oldPath: string; newPath: string; kind: "file" | "folder"; overwrite?: boolean }) => Promise<{
         success: boolean;
         message?: string;

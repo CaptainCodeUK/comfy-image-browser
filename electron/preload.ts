@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld("comfy", {
   revealInFolder: (filePath: string) => ipcRenderer.invoke("comfy:reveal-in-folder", filePath),
   openInEditor: (filePath: string) => ipcRenderer.invoke("comfy:open-in-editor", filePath),
   findMissingFiles: (paths: string[]) => ipcRenderer.invoke("comfy:find-missing-files", paths),
+  confirmMoveOverwrite: (paths: string[]) => ipcRenderer.invoke("comfy:confirm-move-overwrite", paths),
   renamePath: (payload: { oldPath: string; newPath: string; kind: "file" | "folder" }) =>
     ipcRenderer.invoke("comfy:rename-path", payload),
   ensureDirectory: (dirPath: string) => ipcRenderer.invoke("comfy:ensure-directory", dirPath),

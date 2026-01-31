@@ -2332,7 +2332,11 @@ export default function App() {
       setMoveError("Destination is the same as the current folder");
       return;
     }
-    const targetPaths = selectedOrderedImages.map((image) => joinPath(destination, image.fileName));
+    const movePlans = selectedOrderedImages.map((image) => ({
+      image,
+      targetPath: joinPath(destination, image.fileName),
+    }));
+    const targetPaths = movePlans.map((plan) => plan.targetPath);
     let conflictingPaths: string[] = [];
     try {
       const missingPaths = await window.comfy.findMissingFiles(targetPaths);
@@ -2346,20 +2350,35 @@ export default function App() {
       return;
     }
     let shouldOverwrite = false;
+    let skipConflicts = false;
     if (conflictingPaths.length > 0) {
-      const preview = conflictingPaths.slice(0, 3).map((path) => `• ${path}`).join("\n");
-      const extra = conflictingPaths.length > 3 ? `\n...and ${conflictingPaths.length - 3} more file(s)` : "";
-      const confirmed = window.confirm(
-        `The following file(s) already exist:\n${preview}${extra}\n\nOverwrite them and replace the files?`
-      );
-      if (!confirmed) {
+      const preview = buildConflictPreview(conflictingPaths);
+      let choice: "cancel" | "none" | "all";
+      if (window.comfy?.confirmMoveOverwrite) {
+        choice = await window.comfy.confirmMoveOverwrite(conflictingPaths);
+      } else {
+        const confirmed = window.confirm(
+          `The following file(s) already exist:\n${preview}\n\nOverwrite them and replace the files?`
+        );
+        choice = confirmed ? "all" : "cancel";
+      }
+      if (choice === "cancel") {
         const message = "Move canceled";
         setMoveError(message);
         setLastCopied(message);
         return;
       }
-      shouldOverwrite = true;
+      if (choice === "none") {
+        skipConflicts = true;
+      }
+      if (choice === "all") {
+        shouldOverwrite = true;
+      }
     }
+    const conflictSet = new Set(conflictingPaths);
+    const executablePlans = movePlans.filter(
+      (plan) => !(skipConflicts && conflictSet.has(plan.targetPath))
+    );
     setMoving(true);
     setMoveError(null);
     try {
@@ -2375,8 +2394,7 @@ export default function App() {
         }
       }
       const moveResults: Array<{ id: string; fileName: string; filePath: string }> = [];
-      for (const image of selectedOrderedImages) {
-        const targetPath = joinPath(destination, image.fileName);
+      for (const { image, targetPath } of executablePlans) {
         if (targetPath === image.filePath) {
           moveResults.push({ id: image.id, fileName: image.fileName, filePath: image.filePath });
           continue;
@@ -2471,14 +2489,18 @@ export default function App() {
         })
         .filter((entry): entry is IndexedImage => Boolean(entry));
       hydrateFileUrls(hydrated);
-      const successMessage = `Moved ${movedIds.length} file${movedIds.length === 1 ? "" : "s"} to ${destination}`;
+      const skippedCount = skipConflicts ? conflictingPaths.length : 0;
+      let successMessage = `Moved ${movedIds.length} file${movedIds.length === 1 ? "" : "s"} to ${destination}`;
+      if (skippedCount > 0) {
+        successMessage += ` (${skippedCount} file${skippedCount === 1 ? "" : "s"} already existed and were skipped)`;
+      }
       setToastMessage(successMessage);
       setLastCopied(successMessage);
       setMoveOpen(false);
     } finally {
       setMoving(false);
     }
-  }, [collections, hydrateFileUrls, imageById, moveDestination, removeThumbnailEntries, selectedOrderedImages, setCollections, setLastCopied, setToastMessage]);
+  }, [buildConflictPreview, collections, hydrateFileUrls, imageById, moveDestination, removeThumbnailEntries, selectedOrderedImages, setCollections, setLastCopied, setToastMessage]);
 
   useEffect(() => {
     if (moveOpen && selectedOrderedImages.length === 0) {
