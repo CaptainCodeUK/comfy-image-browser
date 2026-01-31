@@ -4,7 +4,7 @@ import type { Tab } from "../lib/appTypes";
 interface TabStripProps {
   tabs: Tab[];
   activeTab: Tab;
-  libraryTab: Tab;
+  collectionTab: Tab;
   onSelectTab: (tab: Tab) => void;
   onDuplicateTab: () => void;
   onCloseTab: (tabId: string) => void;
@@ -17,7 +17,7 @@ interface TabStripProps {
 export function TabStrip({
   tabs,
   activeTab,
-  libraryTab,
+  collectionTab,
   onSelectTab,
   onDuplicateTab,
   onCloseTab,
@@ -26,28 +26,28 @@ export function TabStrip({
   tabRefs,
   tabScrollRef,
 }: TabStripProps) {
-  const nonLibraryTabs = tabs.filter((tab) => tab.id !== libraryTab.id);
+  const nonCollectionTabs = tabs.filter((tab) => tab.id !== collectionTab.id);
   const canCloseAll = tabs.length > 1;
-  const canCloseOthers = tabs.length > 2 && activeTab.id !== libraryTab.id;
+  const canCloseOthers = tabs.length > 2 && activeTab.id !== collectionTab.id;
 
   return (
     <div className="border-b border-slate-800 bg-slate-950/20">
       <div className="flex items-center gap-3">
         <div
           ref={(node) => {
-            tabRefs.current[libraryTab.id] = node;
+            tabRefs.current[collectionTab.id] = node;
           }}
-          className={`flex h-7 flex-none items-center gap-2 px-4 py-0 text-sm ${activeTab.id === libraryTab.id
+          className={`flex h-7 flex-none items-center gap-2 px-4 py-0 text-sm ${activeTab.id === collectionTab.id
             ? "bg-indigo-500 text-white"
             : "bg-slate-800 text-slate-200"
             }`}
         >
           <button
-            onClick={() => onSelectTab(libraryTab)}
+            onClick={() => onSelectTab(collectionTab)}
             className="truncate"
-            aria-current={activeTab.id === libraryTab.id ? "page" : undefined}
+            aria-current={activeTab.id === collectionTab.id ? "page" : undefined}
           >
-            {libraryTab.title}
+            {collectionTab.title}
           </button>
         </div>
         <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -66,7 +66,7 @@ export function TabStrip({
             className="min-w-0 flex-1 h-full overflow-x-auto tab-scroll"
           >
             <div className="flex items-center gap-2 pl-0">
-              {nonLibraryTabs.map((tab) => {
+              {nonCollectionTabs.map((tab) => {
                 const isActive = activeTab.id === tab.id;
                 return (
                   <div

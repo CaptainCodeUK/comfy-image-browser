@@ -9,7 +9,7 @@ type MenuActionBridgeProps = {
   images: IndexedImage[];
   collections: Collection[];
   activeTabId: string;
-  activeTabType: "library" | "image";
+  activeTabType: "collection" | "image";
   activeTabImage: IndexedImage | null;
   activeCollection: string | "all";
   collectionById: Map<string, Collection>;
@@ -55,7 +55,7 @@ type MenuContext = {
   images: IndexedImage[];
   collections: Collection[];
   activeTabId: string;
-  activeTabType: "library" | "image";
+  activeTabType: "collection" | "image";
   activeTabImage: IndexedImage | null;
   activeCollection: string | "all";
   collectionById: Map<string, Collection>;
@@ -400,7 +400,7 @@ export function MenuActionBridge({
         return;
       }
       if (action === "tab-close") {
-        if (context.activeTabType !== "library") {
+  if (context.activeTabType !== "collection") {
           context.handleCloseTab(context.activeTabId);
         }
         return;
@@ -433,17 +433,17 @@ export function MenuActionBridge({
     const collectionTargetId = activeTabType === "image" ? activeTabImage?.collectionId ?? "" : activeCollection;
     const hasActiveCollection =
       collectionTargetId !== "all" && collectionTargetId !== favoritesId && Boolean(collectionById.get(collectionTargetId ?? ""));
-    const isLibraryTab = activeTabType === "library";
+  const isCollectionTab = activeTabType === "collection";
     window.comfy.updateMenuState({
       hasActiveImage,
       hasActiveCollection,
-      hasSelectedImages: isLibraryTab && selectedIds.size > 0,
+  hasSelectedImages: isCollectionTab && selectedIds.size > 0,
       hasSelectedCollections: selectedCollectionIds.size > 0,
-      hasSingleSelectedImage: activeTabType === "image" || (isLibraryTab && selectedIds.size === 1),
+  hasSingleSelectedImage: activeTabType === "image" || (isCollectionTab && selectedIds.size === 1),
       hasSingleSelectedCollection:
         selectedCollectionIds.size === 1 ||
   (activeCollection !== "all" && activeCollection !== favoritesId && selectedCollectionIds.size === 0),
-      hasImages: isLibraryTab && filteredImages.length > 0,
+  hasImages: isCollectionTab && filteredImages.length > 0,
       hasCollections: collections.length > 0,
       canBulkRenameImages: selectedOrderedImages.length > 0,
       isIndexing,

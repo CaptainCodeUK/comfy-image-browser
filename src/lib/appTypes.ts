@@ -7,5 +7,17 @@ export type ProgressState = { current: number; total: number; label: string } | 
 export type RenameState = { type: "image" | "collection"; id: string; value: string } | null;
 
 export type Tab =
-	| { id: "library"; title: "Library"; type: "library" }
+	| { id: "collection"; title: string; type: "collection" }
 	| { id: string; title: string; type: "image"; image: IndexedImage };
+
+export type ZoomMode = "fit" | "actual" | "width" | "height" | "manual";
+
+export type MetadataSummary = {
+	promptText: string | null;
+	width: string | null;
+	height: string | null;
+	batchSize: string | null;
+	checkpoint: string | null;
+	seed: string | null;
+	loras: Array<{ name: string; strength?: number }>;
+};

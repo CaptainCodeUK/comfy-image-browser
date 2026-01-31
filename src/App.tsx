@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent } from "react";
+import type { MouseEvent, SyntheticEvent } from "react";
 import {
   addCollectionWithImages,
   addImagesToCollection,
@@ -22,6 +22,7 @@ import { toComfyUrl } from "./lib/fileUrl";
 import { BulkRenameModal } from "./components/BulkRenameModal";
 import { CollectionSidebar } from "./components/CollectionSidebar";
 import { ImageGrid } from "./components/ImageGrid";
+import { ImageViewer } from "./components/ImageViewer";
 import { TabStrip } from "./components/TabStrip";
 import { useContextMenuDispatcher } from "./hooks/useContextMenuDispatcher";
 import { MenuActionBridge } from "./components/MenuActionBridge";
@@ -224,13 +225,13 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
   };
 };
 
-const LibraryTab: Tab = { id: "library", title: "Library", type: "library" };
+const CollectionTab: Tab = { id: "collection", title: "Collection", type: "collection" };
 
 export default function App() {
   const [collections, setCollections] = useState<Collection[]>([]);
   const [images, setImages] = useState<IndexedImage[]>([]);
-  const [tabs, setTabs] = useState<Tab[]>([LibraryTab]);
-  const [activeTab, setActiveTab] = useState<Tab>(LibraryTab);
+  const [tabs, setTabs] = useState<Tab[]>([CollectionTab]);
+  const [activeTab, setActiveTab] = useState<Tab>(CollectionTab);
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [iconSize, setIconSize] = useState(DEFAULT_ICON_SIZE);
@@ -313,7 +314,7 @@ export default function App() {
   const [thumbnailRetryTick, setThumbnailRetryTick] = useState(0);
   const metadataCacheRef = useRef<Map<string, ReturnType<typeof extractMetadataSummary>>>(new Map());
   const keyNavContextRef = useRef({
-    activeTab: LibraryTab as Tab,
+  activeTab: CollectionTab as Tab,
     selectedIds: new Set<string>(),
     selectedCollectionIds: new Set<string>(),
     images: [] as IndexedImage[],
@@ -334,7 +335,7 @@ export default function App() {
     startRenameImage: (_image: IndexedImage) => { },
     startRenameCollection: (_collection: Collection) => { },
     toggleFavoriteImage: (_image: IndexedImage) => Promise.resolve(),
-    handleOpenImages: (_images: IndexedImage[]) => Promise.resolve(),
+  handleOpenImages: (_images: IndexedImage[], _options?: { activate?: boolean }) => Promise.resolve(),
     handleNavigateImage: (_image: IndexedImage) => Promise.resolve(),
     handleCloseTab: (_tabId: string) => { },
     handleDuplicateTab: () => { },
@@ -1395,7 +1396,10 @@ export default function App() {
     [filteredImageCount, getRangeIds, selectionAnchor, toggleSelection, setFocusedIndex, setSelectionAnchor]
   );
 
-  const handleOpenImages = async (imagesToOpen: IndexedImage[]) => {
+  const handleOpenImages = async (
+    imagesToOpen: IndexedImage[],
+    options: { activate?: boolean } = {}
+  ) => {
     setTabs((prev) => {
       const existingIds = new Set(prev.map((tab) => tab.id));
       const additions = imagesToOpen
@@ -1406,19 +1410,18 @@ export default function App() {
           type: "image" as const,
           image,
         }));
-      return [LibraryTab, ...prev.filter((tab) => tab.id !== "library"), ...additions];
+  return [CollectionTab, ...prev.filter((tab) => tab.id !== "collection"), ...additions];
     });
-    setActiveTab((current) => {
-      if (imagesToOpen.length === 1) {
-        return {
-          id: imagesToOpen[0].id,
-          title: imagesToOpen[0].fileName,
-          type: "image" as const,
-          image: imagesToOpen[0],
-        };
-      }
-      return current;
-    });
+    const shouldActivate = options.activate ?? activeTab.type === "image";
+    if (shouldActivate && imagesToOpen.length > 0) {
+      const targetImage = imagesToOpen[0];
+      setActiveTab({
+        id: targetImage.id,
+        title: targetImage.fileName,
+        type: "image",
+        image: targetImage,
+      });
+    }
 
     const resolvedImages = await resolveFileUrlsForTabs(imagesToOpen);
     applyResolvedTabUrls(resolvedImages);
@@ -1426,7 +1429,7 @@ export default function App() {
 
   const handleNavigateImage = async (target: IndexedImage) => {
     if (activeTab.type !== "image") {
-      await handleOpenImages([target]);
+      await handleOpenImages([target], { activate: true });
       return;
     }
 
@@ -1549,7 +1552,7 @@ export default function App() {
         }
         return;
       }
-      if (event.key === "Enter" && context.activeTab.type === "library" && context.selectedIds.size > 0) {
+  if (event.key === "Enter" && context.activeTab.type === "collection" && context.selectedIds.size > 0) {
         event.preventDefault();
         const selected = Array.from(context.selectedIds)
           .map((id) => context.imageById.get(id))
@@ -1597,7 +1600,7 @@ export default function App() {
         event.preventDefault();
         if (event.shiftKey) {
           context.handleSelectAllCollections();
-        } else if (context.activeTab.type === "library") {
+  } else if (context.activeTab.type === "collection") {
           context.handleSelectAllImages();
         }
         return;
@@ -1606,7 +1609,7 @@ export default function App() {
         event.preventDefault();
         if (event.shiftKey) {
           context.handleInvertCollectionSelection();
-        } else if (context.activeTab.type === "library") {
+  } else if (context.activeTab.type === "collection") {
           context.handleInvertImageSelection();
         }
         return;
@@ -1615,7 +1618,7 @@ export default function App() {
         event.preventDefault();
         if (event.shiftKey) {
           context.handleClearCollectionSelection();
-        } else if (context.activeTab.type === "library") {
+  } else if (context.activeTab.type === "collection") {
           context.handleClearImageSelection();
         }
         return;
@@ -1637,7 +1640,7 @@ export default function App() {
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w") {
         event.preventDefault();
-        if (context.activeTab.id !== "library") {
+  if (context.activeTab.id !== "collection") {
           context.handleCloseTab(context.activeTab.id);
         }
         return;
@@ -1652,7 +1655,7 @@ export default function App() {
         setActiveTab(context.tabs[nextIndex]);
         return;
       }
-      if (context.activeTab.type === "library") {
+  if (context.activeTab.type === "collection") {
         if (context.filteredImageCount === 0) return;
         const isNavigationKey =
           event.key === "ArrowLeft" ||
@@ -1760,14 +1763,14 @@ export default function App() {
   }, [searchInputRef]);
 
   function handleCloseTab(tabId: string) {
-    if (tabId === "library") return;
+    if (tabId === "collection") return;
     setTabs((prev) => {
       const index = prev.findIndex((tab) => tab.id === tabId);
       const nextTabs = prev.filter((tab) => tab.id !== tabId);
 
       setActiveTab((current) => {
         if (current.id !== tabId) return current;
-        if (nextTabs.length === 0) return LibraryTab;
+  if (nextTabs.length === 0) return CollectionTab;
         const leftIndex = Math.max(0, index - 1);
         const fallbackIndex = Math.min(leftIndex, nextTabs.length - 1);
         return nextTabs[fallbackIndex];
@@ -1778,16 +1781,16 @@ export default function App() {
   }
 
   function handleCloseAllTabs() {
-    setTabs([LibraryTab]);
-    setActiveTab(LibraryTab);
+  setTabs([CollectionTab]);
+  setActiveTab(CollectionTab);
   }
 
   function handleCloseOtherTabs(tabId: string) {
     setTabs((prev) => {
-      const keep = prev.filter((tab) => tab.id === "library" || tab.id === tabId);
-      return keep.length ? keep : [LibraryTab];
+      const keep = prev.filter((tab) => tab.id === "collection" || tab.id === tabId);
+      return keep.length ? keep : [CollectionTab];
     });
-    setActiveTab((current) => (current.id === tabId ? current : LibraryTab));
+    setActiveTab((current) => (current.id === tabId ? current : CollectionTab));
   }
 
   function handleCycleTab(direction: number) {
@@ -1885,8 +1888,8 @@ export default function App() {
       ids.forEach((id) => next.delete(id));
       return next;
     });
-    setTabs((prev) => prev.filter((tab) => tab.type === "library" || !idSet.has(tab.id)));
-    setActiveTab((current) => (current.type === "image" && idSet.has(current.id) ? LibraryTab : current));
+    setTabs((prev) => prev.filter((tab) => tab.type === "collection" || !idSet.has(tab.id)));
+    setActiveTab((current) => (current.type === "image" && idSet.has(current.id) ? CollectionTab : current));
     if (ids.length > 1) {
       setRemovalImageProgress({ current: ids.length, total: ids.length, label: "" });
       setRemovalImageProgress(null);
@@ -2246,7 +2249,7 @@ export default function App() {
       return next;
     });
     setImages((prev) => prev.filter((image) => !removedIdSet.has(image.id)));
-    setTabs((prev) => prev.filter((tab) => tab.type === "library" || !removedIdSet.has(tab.image.id)));
+  setTabs((prev) => prev.filter((tab) => tab.type === "collection" || !removedIdSet.has(tab.image.id)));
     setSelectedIds((prev) => {
       const next = new Set(prev);
       removedImageIds.forEach((id) => next.delete(id));
@@ -2706,7 +2709,7 @@ export default function App() {
 
 
   const activeTabContent = useMemo(() => {
-    if (activeTab.type === "library") return null;
+  if (activeTab.type === "collection") return null;
     return activeTab.image;
   }, [activeTab]);
 
@@ -2840,6 +2843,19 @@ export default function App() {
     }
   };
 
+  const handleImageLoad = useCallback(
+    (event: SyntheticEvent<HTMLImageElement>) => {
+      const target = event.currentTarget;
+      setImageSize({ width: target.naturalWidth, height: target.naturalHeight });
+      setIsImageLoading(false);
+    },
+    [setImageSize, setIsImageLoading]
+  );
+
+  const handleImageError = useCallback(() => {
+    setIsImageLoading(false);
+  }, [setIsImageLoading]);
+
   useEffect(() => {
     if (!toastMessage) return;
     setToastVisibleMessage(toastMessage);
@@ -2951,7 +2967,7 @@ export default function App() {
     const observer = new ResizeObserver(() => update());
     observer.observe(target);
     return () => observer.disconnect();
-  }, [gridRef, filteredImages.length, iconSize]);
+  }, [gridRef, filteredImages.length, iconSize, activeTab.type]);
 
   useEffect(() => {
     if (!lastCopied) return;
@@ -3173,7 +3189,7 @@ export default function App() {
           <TabStrip
             tabs={tabs}
             activeTab={activeTab}
-            libraryTab={LibraryTab}
+            collectionTab={CollectionTab}
             onSelectTab={(tab) => setActiveTab(tab)}
             onDuplicateTab={handleDuplicateTab}
             onCloseTab={handleCloseTab}
@@ -3183,7 +3199,7 @@ export default function App() {
             tabScrollRef={tabScrollRef}
           />
 
-          {activeTab.type === "library" ? (
+          {activeTab.type === "collection" ? (
             <section className="flex-1 overflow-hidden">
               <div
                 ref={gridRef}
@@ -3214,7 +3230,7 @@ export default function App() {
                   handleImageContextMenu={handleImageContextMenu}
                   onImageClick={handleImageClick}
                   onImageDoubleClick={(image) => {
-                    void handleOpenImages([image]);
+                    void handleOpenImages([image], { activate: true });
                   }}
                   onFavoriteToggle={toggleFavoriteImage}
                   markThumbLoaded={markThumbLoaded}
@@ -3223,266 +3239,36 @@ export default function App() {
               </div>
             </section>
           ) : activeTabContent ? (
-            <section className="flex flex-1 overflow-hidden">
-              <div className="flex flex-1 flex-col overflow-hidden">
-                <div
-                  ref={(node) => {
-                    viewerRef.current = node;
-                    viewerFocusRef.current = node;
-                  }}
-                  tabIndex={0}
-                  className="relative flex flex-1 items-center justify-center overflow-auto p-2 outline-none"
-                >
-                  <img
-                    ref={activeImageRef}
-                    src={activeTabContent.fileUrl === activeTabContent.filePath ? toComfyUrl(activeTabContent.filePath) : activeTabContent.fileUrl}
-                    alt={activeTabContent.fileName}
-                    decoding="async"
-                    loading="eager"
-                    className={`viewer-image object-contain ${viewerSizingClass}`}
-                    onLoad={(event) => {
-                      const target = event.currentTarget;
-                      setImageSize({ width: target.naturalWidth, height: target.naturalHeight });
-                      setIsImageLoading(false);
-                    }}
-                    onError={() => setIsImageLoading(false)}
-                  />
-                  {isImageLoading ? (
-                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                      <div className="flex items-center gap-2 rounded-full border border-slate-700 bg-slate-950/70 px-3 py-2 text-xs text-slate-200 shadow">
-                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
-                        Loading image…
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="absolute bottom-4 right-4 flex flex-col items-end gap-3 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-xs text-slate-200 shadow-lg">
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <button
-                        onClick={() => setActiveZoomMode("fit")}
-                        className="rounded-md border border-slate-700 px-2 py-1"
-                      >
-                        Fit
-                      </button>
-                      <button
-                        onClick={() => setActiveZoomMode("actual")}
-                        className="rounded-md border border-slate-700 px-2 py-1"
-                      >
-                        100%
-                      </button>
-                      <button
-                        onClick={() => setActiveZoomMode("width")}
-                        className="rounded-md border border-slate-700 px-2 py-1"
-                      >
-                        Fit width
-                      </button>
-                      <button
-                        onClick={() => setActiveZoomMode("height")}
-                        className="rounded-md border border-slate-700 px-2 py-1"
-                      >
-                        Fit height
-                      </button>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span>Zoom</span>
-                      <input
-                        type="range"
-                        min={0.5}
-                        max={3}
-                        step={0.1}
-                        value={derivedZoom}
-                        onChange={(event) => {
-                          setActiveZoomLevel(Number(event.target.value));
-                        }}
-                        aria-label="Zoom image"
-                      />
-                      <span className="w-12 text-right">{Math.round(derivedZoom * 100)}%</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <aside className="w-96 border-l border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-200">
-                {renameState?.type === "image" && renameState.id === activeTabContent.id ? (
-                  <input
-                    ref={renameInputRef}
-                    value={renameState.value}
-                    onChange={(event) =>
-                      setRenameState((prev) =>
-                        prev && prev.type === "image" && prev.id === activeTabContent.id
-                          ? { ...prev, value: event.target.value }
-                          : prev
-                      )
-                    }
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        void commitRename();
-                      }
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        renameCancelRef.current = true;
-                        cancelRename();
-                      }
-                    }}
-                    onBlur={() => {
-                      if (renameCancelRef.current) {
-                        renameCancelRef.current = false;
-                        return;
-                      }
-                      void commitRename();
-                    }}
-                    className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-base text-slate-100"
-                    aria-label="Rename image"
-                  />
-                ) : (
-                  <div className="text-lg font-semibold">{activeTabContent.fileName}</div>
-                )}
-                <div className="mt-2 text-xs text-slate-500">{activeTabContent.filePath}</div>
-                <div className="mt-3">
-                  <button
-                    onClick={() => void toggleFavoriteImage(activeTabContent)}
-                    className={`rounded-md border px-2 py-1 text-xs transition ${favoriteIds.has(activeTabContent.id)
-                        ? "border-amber-400/70 bg-amber-500/10 text-amber-200"
-                        : "border-slate-700 text-slate-300 hover:border-slate-500"
-                      }`}
-                  >
-                    {favoriteIds.has(activeTabContent.id) ? "★ Remove from favourites" : "☆ Add to favourites"}
-                  </button>
-                </div>
-                <div className="mt-4 space-y-2">
-                  <div>Collection: {collectionById.get(activeTabContent.collectionId)?.name ?? "Unknown"}</div>
-                  <div>Size: {formatBytes(activeTabContent.sizeBytes)}</div>
-                  {activeTabContent.width && activeTabContent.height ? (
-                    <div>
-                      Dimensions: {activeTabContent.width} × {activeTabContent.height}
-                    </div>
-                  ) : null}
-                </div>
-                <div className="mt-6">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs uppercase tracking-wide text-slate-400">Metadata</div>
-                    <button
-                      onClick={() =>
-                        copyToClipboard(
-                          JSON.stringify(activeTabContent?.metadataText ?? {}, null, 2),
-                          "Decoded metadata"
-                        )
-                      }
-                      className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${lastCopied === "Decoded metadata"
-                          ? "border-indigo-400 bg-indigo-500/20"
-                          : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
-                        }`}
-                      aria-label="Copy decoded metadata"
-                      title="Copy decoded metadata"
-                    >
-                      ⧉ Copy
-                    </button>
-                  </div>
-                  <div className="mt-2 rounded-lg bg-slate-900 p-3 text-xs text-slate-300">
-                    {metadataSummary ? (
-                      <div className="grid gap-2">
-                        {metadataSummary.promptText ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
-                            <div className="break-words text-slate-400">Prompt</div>
-                            <div className="break-words text-slate-100">{metadataSummary.promptText}</div>
-                            <button
-                              onClick={() => copyToClipboard(metadataSummary.promptText ?? "", "Prompt")}
-                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${lastCopied === "Prompt"
-                                  ? "border-indigo-400 bg-indigo-500/20"
-                                  : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
-                                }`}
-                              aria-label="Copy prompt"
-                              title="Copy prompt"
-                            >
-                              ⧉
-                            </button>
-                          </div>
-                        ) : null}
-                        {metadataSummary.width && metadataSummary.height ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
-                            <div className="break-words text-slate-400">Resolution</div>
-                            <div className="break-words text-slate-100">
-                              {metadataSummary.width} × {metadataSummary.height}
-                            </div>
-                            <div className="h-8 w-8" aria-hidden="true" />
-                          </div>
-                        ) : null}
-                        {metadataSummary.batchSize ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
-                            <div className="break-words text-slate-400">Batch size</div>
-                            <div className="break-words text-slate-100">{metadataSummary.batchSize}</div>
-                            <div className="h-8 w-8" aria-hidden="true" />
-                          </div>
-                        ) : null}
-                        {metadataSummary.checkpoint ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
-                            <div className="break-words text-slate-400">Checkpoint</div>
-                            <div className="break-words text-slate-100">{metadataSummary.checkpoint}</div>
-                            <button
-                              onClick={() => copyToClipboard(metadataSummary.checkpoint ?? "", "Checkpoint")}
-                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${lastCopied === "Checkpoint"
-                                  ? "border-indigo-400 bg-indigo-500/20"
-                                  : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
-                                }`}
-                              aria-label="Copy checkpoint"
-                              title="Copy checkpoint"
-                            >
-                              ⧉
-                            </button>
-                          </div>
-                        ) : null}
-                        {metadataSummary.seed ? (
-                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
-                            <div className="break-words text-slate-400">Seed</div>
-                            <div className="break-words text-slate-100">{metadataSummary.seed}</div>
-                            <button
-                              onClick={() => copyToClipboard(metadataSummary.seed ?? "", "Seed")}
-                              className={`rounded-[10px] border px-2.5 py-1.5 text-sm text-slate-200 transition ${lastCopied === "Seed"
-                                  ? "border-indigo-400 bg-indigo-500/20"
-                                  : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
-                                }`}
-                              aria-label="Copy seed"
-                              title="Copy seed"
-                            >
-                              ⧉
-                            </button>
-                          </div>
-                        ) : null}
-                        {metadataSummary.loras.length ? (
-                          <div className="space-y-2">
-                            <div className="text-xs uppercase tracking-wide text-slate-400">LoRAs</div>
-                            <ul className="space-y-2 text-slate-100">
-                              {metadataSummary.loras.map((lora) => {
-                                const label =
-                                  lora.strength !== undefined ? `${lora.name} (${lora.strength})` : lora.name;
-                                const copyLabel = `LoRA: ${lora.name}`;
-                                return (
-                                  <li key={lora.name} className="flex items-start gap-3">
-                                    <span className="min-w-0 flex-1 break-words">• {label}</span>
-                                    <button
-                                      onClick={() => copyToClipboard(label, copyLabel)}
-                                      className={`shrink-0 rounded-[10px] border px-2 py-1 text-xs text-slate-200 transition ${lastCopied === copyLabel
-                                          ? "border-indigo-400 bg-indigo-500/20"
-                                          : "border-slate-700 bg-slate-950/40 hover:border-slate-500"
-                                        }`}
-                                      aria-label={`Copy LoRA ${lora.name}`}
-                                      title={`Copy ${lora.name}`}
-                                    >
-                                      ⧉
-                                    </button>
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <div className="text-slate-500">No metadata found for this image.</div>
-                    )}
-                  </div>
-                </div>
-              </aside>
-            </section>
+            <ImageViewer
+              image={activeTabContent}
+              imageUrl={
+                activeTabContent.fileUrl === activeTabContent.filePath
+                  ? toComfyUrl(activeTabContent.filePath)
+                  : activeTabContent.fileUrl
+              }
+              viewerRef={viewerRef}
+              viewerFocusRef={viewerFocusRef}
+              activeImageRef={activeImageRef}
+              onImageLoad={handleImageLoad}
+              onImageError={handleImageError}
+              isImageLoading={isImageLoading}
+              viewerSizingClass={viewerSizingClass}
+              derivedZoom={derivedZoom}
+              setActiveZoomMode={setActiveZoomMode}
+              setActiveZoomLevel={setActiveZoomLevel}
+              toggleFavoriteImage={toggleFavoriteImage}
+              favoriteIds={favoriteIds}
+              renameState={renameState}
+              renameInputRef={renameInputRef}
+              renameCancelRef={renameCancelRef}
+              setRenameState={setRenameState}
+              commitRename={commitRename}
+              cancelRename={cancelRename}
+              collectionById={collectionById}
+              metadataSummary={metadataSummary}
+              copyToClipboard={copyToClipboard}
+              lastCopied={lastCopied}
+            />
           ) : null}
         </main>
       </div>
