@@ -1,4 +1,4 @@
-import type { IndexedImage } from "./types";
+import type { Collection, IndexedImage } from "./types";
 
 export type CollectionSort = "name-asc" | "name-desc" | "added-desc" | "added-asc";
 
@@ -21,4 +21,10 @@ export type MetadataSummary = {
 	seed: string | null;
 	loras: Array<{ name: string; strength?: number }>;
 	parametersText: string | null;
+};
+
+export type CollectionNode = {
+	collection: Collection;
+	depth: number;
+	children: CollectionNode[];
 };

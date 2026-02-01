@@ -29,7 +29,7 @@ import { ImageViewer } from "./components/ImageViewer";
 import { TabStrip } from "./components/TabStrip";
 import { useContextMenuDispatcher } from "./hooks/useContextMenuDispatcher";
 import { MenuActionBridge } from "./components/MenuActionBridge";
-import type { CollectionSort, ProgressState, RenameState, Tab } from "./lib/appTypes";
+import type { CollectionNode, CollectionSort, ProgressState, RenameState, Tab } from "./lib/appTypes";
 
 const DEFAULT_ICON_SIZE = 180;
 const GRID_GAP = 16;
@@ -242,6 +242,7 @@ export default function App() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [iconSize, setIconSize] = useState(DEFAULT_ICON_SIZE);
   const [activeCollection, setActiveCollection] = useState<string | "all">("all");
+  const [includeSubCollections, setIncludeSubCollections] = useState(true);
   const [isIndexing, setIsIndexing] = useState(false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [zoomByTab, setZoomByTab] = useState<Record<string, { mode: ZoomMode; level: number }>>({});
@@ -801,6 +802,82 @@ export default function App() {
     [imageSort]
   );
 
+  const sortedCollections = useMemo(
+    () => sortCollections(collections, collectionSort),
+    [collections, collectionSort]
+  );
+
+  const collectionTree = useMemo(() => {
+    type BuildNode = {
+      collection: Collection;
+      depth: number;
+      children: BuildNode[];
+      normalizedRoot: string;
+    };
+    const buildNodes: BuildNode[] = sortedCollections.map((collection) => ({
+      collection,
+      depth: 0,
+      children: [],
+      normalizedRoot: normalizeForComparison(collection.rootPath),
+    }));
+    const roots: BuildNode[] = [];
+    for (const node of buildNodes) {
+      let parent: BuildNode | null = null;
+      let bestLength = -1;
+      for (const candidate of buildNodes) {
+        if (candidate === node) continue;
+        if (isPathWithinRoot(node.collection.rootPath, candidate.collection.rootPath)) {
+          const length = candidate.normalizedRoot.length;
+          if (length > bestLength) {
+            parent = candidate;
+            bestLength = length;
+          }
+        }
+      }
+      if (parent) {
+        node.depth = parent.depth + 1;
+        parent.children.push(node);
+      } else {
+        roots.push(node);
+      }
+    }
+    const mapNode = (buildNode: BuildNode): CollectionNode => ({
+      collection: buildNode.collection,
+      depth: buildNode.depth,
+      children: buildNode.children.map(mapNode),
+    });
+    return roots.map(mapNode);
+  }, [sortedCollections]);
+
+  const flattenedCollections = useMemo(() => {
+    const list: CollectionNode[] = [];
+    const traverse = (node: CollectionNode) => {
+      list.push(node);
+      node.children.forEach(traverse);
+    };
+    collectionTree.forEach(traverse);
+    return list;
+  }, [collectionTree]);
+
+  const collectionIds = useMemo(() => flattenedCollections.map((node) => node.collection.id), [flattenedCollections]);
+
+  const collectionDescendantIds = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    const build = (node: CollectionNode): Set<string> => {
+      const aggregated = new Set<string>();
+      aggregated.add(node.collection.id);
+      node.children.forEach((child) => {
+        const childSet = build(child);
+        childSet.forEach((id) => aggregated.add(id));
+      });
+      const descendants = new Set(Array.from(aggregated).filter((id) => id !== node.collection.id));
+      map.set(node.collection.id, descendants);
+      return aggregated;
+    };
+    collectionTree.forEach((node) => build(node));
+    return map;
+  }, [collectionTree]);
+
   const sortedFilteredImages = useMemo(() => {
     const start = performance.now();
     const query = search.trim().toLowerCase();
@@ -808,20 +885,38 @@ export default function App() {
       activeCollection !== "all" && activeCollection !== FAVORITES_ID
         ? collectionById.get(activeCollection)
         : null;
+    const allowedCollectionIds =
+      includeSubCollections && activeCollection !== "all" && activeCollection !== FAVORITES_ID
+        ? (() => {
+            const set = new Set<string>();
+            const descendants = collectionDescendantIds.get(activeCollection);
+            if (descendants) {
+              descendants.forEach((id) => set.add(id));
+            }
+            set.add(activeCollection);
+            return set;
+          })()
+        : null;
     const visible = images.filter((image) => {
       if (activeCollection === FAVORITES_ID && !favoriteIds.has(image.id)) {
         return false;
       }
       if (activeCollectionRecord?.includeSubfolders) {
-        if (!isPathWithinRoot(image.filePath, activeCollectionRecord.rootPath)) {
+        if (!includeSubCollections) {
+          if (image.collectionId !== activeCollection) {
+            return false;
+          }
+        } else if (!isPathWithinRoot(image.filePath, activeCollectionRecord.rootPath)) {
           return false;
         }
-      } else if (
-        activeCollection !== "all" &&
-        activeCollection !== FAVORITES_ID &&
-        image.collectionId !== activeCollection
-      ) {
-        return false;
+      } else if (activeCollection !== "all" && activeCollection !== FAVORITES_ID) {
+        if (includeSubCollections) {
+          if (allowedCollectionIds && !allowedCollectionIds.has(image.collectionId)) {
+            return false;
+          }
+        } else if (image.collectionId !== activeCollection) {
+          return false;
+        }
       }
       if (!query) return true;
       const searchText = searchIndex.get(image.id) ?? "";
@@ -837,7 +932,7 @@ export default function App() {
       });
     }
     return { sorted, query };
-  }, [images, search, activeCollection, favoriteIds, searchIndex, sortImages]);
+  }, [images, search, activeCollection, favoriteIds, searchIndex, sortImages, collectionDescendantIds, includeSubCollections]);
 
   const filteredImageResult = useMemo(() => {
     const sorted = sortedFilteredImages.sorted;
@@ -1032,13 +1127,6 @@ export default function App() {
       setSelectedIds(new Set());
     }
   }, [activeCollection]);
-
-  const sortedCollections = useMemo(
-    () => sortCollections(collections, collectionSort),
-    [collections, collectionSort]
-  );
-
-  const collectionIds = useMemo(() => sortedCollections.map((collection) => collection.id), [sortedCollections]);
 
   const hydrateFileUrls = useCallback(
     (sourceImages: IndexedImage[]) => {
@@ -2436,12 +2524,6 @@ export default function App() {
         finalCollection = created;
         setCollections((prev) => [...prev, created]);
       }
-      if (finalCollection) {
-        setActiveCollection(finalCollection.id);
-        setSelectedCollectionIds(new Set([finalCollection.id]));
-        setCollectionFocusedId(finalCollection.id);
-        setCollectionSelectionAnchor(null);
-      }
       const targetCollectionId = finalCollection.id;
       const moveMap = new Map(
         moveResults.map((entry) => [entry.id, { ...entry, collectionId: targetCollectionId }])
@@ -3499,7 +3581,7 @@ export default function App() {
           bridgeAvailable={bridgeAvailable}
           collectionSort={collectionSort}
           onCollectionSortChange={(value) => setCollectionSort(value)}
-          sortedCollections={sortedCollections}
+          collectionTree={collectionTree}
           collectionIds={collectionIds}
           collectionHighlightId={collectionHighlightId}
           favoritesId={FAVORITES_ID}
@@ -3510,6 +3592,8 @@ export default function App() {
           setCollectionSelectionAnchor={setCollectionSelectionAnchor}
           setSelectedCollectionIds={setSelectedCollectionIds}
           setActiveCollection={setActiveCollection}
+          includeSubCollections={includeSubCollections}
+          setIncludeSubCollections={setIncludeSubCollections}
           renameState={renameState}
           renameInputRef={renameInputRef}
           renameCancelRef={renameCancelRef}

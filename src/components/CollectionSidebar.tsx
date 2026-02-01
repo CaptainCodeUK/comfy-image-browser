@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent } from "react";
 import type { Collection } from "../lib/types";
-import type { CollectionSort, ProgressState, RenameState } from "../lib/appTypes";
+import type { CollectionNode, CollectionSort, ProgressState, RenameState } from "../lib/appTypes";
 import { CollectionActions } from "./CollectionActions";
 
 interface CollectionSidebarProps {
   bridgeAvailable: boolean;
   collectionSort: CollectionSort;
   onCollectionSortChange: (sort: CollectionSort) => void;
-  sortedCollections: Collection[];
+  collectionTree: CollectionNode[];
   collectionIds: string[];
   collectionHighlightId: string | "all";
   favoritesId: string;
@@ -37,6 +37,8 @@ interface CollectionSidebarProps {
   removalCanceling: boolean;
   handleCancelRemoval: () => void;
   cancelingIndex: boolean;
+  includeSubCollections: boolean;
+  setIncludeSubCollections: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 const COLLECTION_NAV_KEYS = ["ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"];
@@ -45,7 +47,7 @@ export function CollectionSidebar({
   bridgeAvailable,
   collectionSort,
   onCollectionSortChange,
-  sortedCollections,
+  collectionTree,
   collectionIds,
   collectionHighlightId,
   favoritesId,
@@ -74,9 +76,13 @@ export function CollectionSidebar({
   removalCanceling,
   handleCancelRemoval,
   cancelingIndex,
+  includeSubCollections,
+  setIncludeSubCollections,
 }: CollectionSidebarProps) {
   const collectionListRef = useRef<HTMLDivElement | null>(null);
   const collectionRowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const depthClasses = ["pl-3", "pl-5", "pl-7", "pl-9", "pl-10", "pl-12", "pl-14"];
+  const [collapsedCollectionIds, setCollapsedCollectionIds] = useState<Set<string>>(() => new Set());
 
   const getCollectionRangeIds = useCallback(
     (start: number, end: number) => {
@@ -269,7 +275,157 @@ export function CollectionSidebar({
     }
   }, [collectionFocusedId]);
 
+  useEffect(() => {
+    setCollapsedCollectionIds((prev) => {
+      const validIds = new Set(collectionIds);
+      const next = new Set(Array.from(prev).filter((id) => validIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [collectionIds]);
+
+  const toggleCollectionCollapse = useCallback((collectionId: string) => {
+    setCollapsedCollectionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(collectionId)) {
+        next.delete(collectionId);
+      } else {
+        next.add(collectionId);
+      }
+      return next;
+    });
+  }, []);
+
   const selectionCount = selectedCollectionIds.size;
+
+  const collectionIndexById = useMemo(() => {
+    const map = new Map<string, number>();
+    collectionIds.forEach((id, index) => map.set(id, index));
+    return map;
+  }, [collectionIds]);
+
+  const renderCollectionNodes = (nodes: CollectionNode[], depth = 0): JSX.Element[] => {
+    return nodes.map((node) => {
+      const collection = node.collection;
+      const index = collectionIndexById.get(collection.id) ?? 0;
+      const isSelected = selectedCollectionIds.has(collection.id);
+      const isFocused = collectionFocusedId === collection.id;
+      const isActive = collectionHighlightId === collection.id;
+      const depthIndex = Math.min(depth, depthClasses.length - 1);
+      const depthClass = depthClasses[depthIndex];
+      const hasChildren = node.children.length > 0;
+      const isCollapsed = collapsedCollectionIds.has(collection.id);
+      const levelLabel = `L${depth + 1}`;
+      return (
+        <div key={collection.id} className={`space-y-2 ${depthClass}`}>
+          <div className="flex items-center gap-2">
+            {hasChildren ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  toggleCollectionCollapse(collection.id);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    toggleCollectionCollapse(collection.id);
+                  }
+                }}
+                aria-expanded={!isCollapsed}
+                aria-label={isCollapsed ? "Expand collection" : "Collapse collection"}
+                className="h-8 w-8 rounded-full border border-transparent text-xs text-slate-400 transition hover:border-slate-600"
+              >
+                {isCollapsed ? "▸" : "▾"}
+              </button>
+            ) : (
+              <span className="h-8 w-8 text-center text-xs text-slate-500">•</span>
+            )}
+            <button
+              ref={(nodeRef) => {
+                collectionRowRefs.current[collection.id] = nodeRef;
+              }}
+              type="button"
+              onContextMenu={(event) => {
+                event.preventDefault();
+                handleCollectionContextSelection(collection, index);
+                void handleCollectionContextMenu(event, collection);
+              }}
+              onClick={(event) => handleCollectionRowClick(collection, index, event)}
+              onKeyDown={(event) => handleCollectionRowKeyDown(collection, index, event)}
+              onFocus={() => setCollectionFocusedId(collection.id)}
+              aria-pressed={isSelected}
+              className={`flex-1 rounded-lg pr-3 py-2 text-left text-sm transition ${isActive
+                  ? "bg-slate-800 text-white"
+                  : "text-slate-300 hover:bg-slate-900"
+                } ${isSelected ? "bg-slate-900/70 border border-slate-700" : "border border-transparent"} ${isFocused
+                  ? "ring-1 ring-indigo-400 ring-inset"
+                  : ""
+                }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 text-left">
+                  {renameState?.type === "collection" && renameState.id === collection.id ? (
+                    <>
+                      <input
+                        ref={renameInputRef}
+                        value={renameState.value}
+                        onChange={(event) =>
+                          setRenameState((prev) =>
+                            prev && prev.type === "collection" && prev.id === collection.id
+                              ? { ...prev, value: event.target.value }
+                              : prev
+                          )
+                        }
+                        onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            void commitRename();
+                          }
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            renameCancelRef.current = true;
+                            cancelRename();
+                          }
+                        }}
+                        onBlur={() => {
+                          if (renameCancelRef.current) {
+                            renameCancelRef.current = false;
+                            return;
+                          }
+                          cancelRename();
+                        }}
+                        className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100"
+                        aria-label="Rename collection"
+                      />
+                      <div className="truncate text-xs text-slate-400" title={collection.rootPath}>
+                        {collection.rootPath}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="font-medium">{collection.name}</div>
+                      <div className="truncate text-xs text-slate-400" title={collection.rootPath}>
+                        {collection.rootPath}
+                      </div>
+                    </>
+                  )}
+                </div>
+                <span className="text-[10px] uppercase tracking-wider text-slate-500">{levelLabel}</span>
+              </div>
+            </button>
+          </div>
+          {hasChildren && !isCollapsed ? (
+            <div className="space-y-2">
+              {renderCollectionNodes(node.children, depth + 1)}
+            </div>
+          ) : null}
+        </div>
+      );
+    });
+  };
 
   return (
     <aside className="flex w-64 flex-col border-r border-slate-800 bg-slate-950/50 p-4">
@@ -314,82 +470,21 @@ export function CollectionSidebar({
       <div
         ref={collectionListRef}
         onKeyDown={handleCollectionListKeyDown}
-        className="mt-3 flex-1 space-y-2 overflow-auto"
+        className="mt-3 flex-1 overflow-auto"
       >
-        {sortedCollections.map((collection, index) => {
-          const isSelected = selectedCollectionIds.has(collection.id);
-          const isFocused = collectionFocusedId === collection.id;
-          const isActive = collectionHighlightId === collection.id;
-          return (
-            <div key={collection.id}>
-              <button
-                ref={(node) => {
-                  collectionRowRefs.current[collection.id] = node;
-                }}
-                type="button"
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  handleCollectionContextSelection(collection, index);
-                  void handleCollectionContextMenu(event, collection);
-                }}
-                onClick={(event) => handleCollectionRowClick(collection, index, event)}
-                onKeyDown={(event) => handleCollectionRowKeyDown(collection, index, event)}
-                onFocus={() => setCollectionFocusedId(collection.id)}
-                aria-pressed={isSelected}
-                className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${isActive ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900"
-                  } ${isSelected ? "bg-slate-900/70 border border-slate-700" : "border border-transparent"} ${isFocused ? "ring-1 ring-indigo-400 ring-inset" : ""
-                  }`}
-              >
-                {renameState?.type === "collection" && renameState.id === collection.id ? (
-                  <div className="min-w-0 text-left">
-                    <input
-                      ref={renameInputRef}
-                      value={renameState.value}
-                      onChange={(event) =>
-                        setRenameState((prev) =>
-                          prev && prev.type === "collection" && prev.id === collection.id
-                            ? { ...prev, value: event.target.value }
-                            : prev
-                        )
-                      }
-                      onClick={(event) => event.stopPropagation()}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          void commitRename();
-                        }
-                        if (event.key === "Escape") {
-                          event.preventDefault();
-                          renameCancelRef.current = true;
-                          cancelRename();
-                        }
-                      }}
-                      onBlur={() => {
-                        if (renameCancelRef.current) {
-                          renameCancelRef.current = false;
-                          return;
-                        }
-                        cancelRename();
-                      }}
-                      className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100"
-                      aria-label="Rename collection"
-                    />
-                    <div className="truncate text-xs text-slate-400" title={collection.rootPath}>
-                      {collection.rootPath}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="min-w-0 text-left">
-                    <div className="font-medium">{collection.name}</div>
-                    <div className="truncate text-xs text-slate-400" title={collection.rootPath}>
-                      {collection.rootPath}
-                    </div>
-                  </div>
-                )}
-              </button>
-            </div>
-          );
-        })}
+        {collectionTree.length ? renderCollectionNodes(collectionTree) : null}
+      </div>
+      <div className="mt-3 flex items-center gap-2 text-sm text-slate-200">
+        <input
+          id="include-subcollections"
+          type="checkbox"
+          className="h-4 w-4 rounded border border-slate-700 bg-slate-900 text-indigo-400"
+          checked={includeSubCollections}
+          onChange={(event) => setIncludeSubCollections(event.target.checked)}
+        />
+        <label htmlFor="include-subcollections" className="select-none">
+          Show sub-collections when selecting a parent
+        </label>
       </div>
       <CollectionActions
         bridgeAvailable={bridgeAvailable}
