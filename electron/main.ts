@@ -62,6 +62,7 @@ const menuLocks = {
     isDeleting: false,
 };
 
+app.commandLine.appendSwitch("js-flags", "--expose-gc");
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_NAME);
 
@@ -635,16 +636,81 @@ const buildImagePayload = async (filePath: string, collectionRoot: string): Prom
     return payload;
 };
 
-ipcMain.handle("comfy:select-folders", async () => {
-    const result = await dialog.showOpenDialog({
+ipcMain.handle("comfy:select-folders", async (_event: IpcMainInvokeEvent, defaultPath?: string) => {
+    const options: Electron.OpenDialogOptions = {
         properties: ["openDirectory", "multiSelections"],
-    });
+    };
+    if (defaultPath && existsSync(defaultPath)) {
+        options.defaultPath = defaultPath;
+    }
+    const result = await dialog.showOpenDialog(options);
 
     if (result.canceled) {
         return [] as string[];
     }
 
     return result.filePaths;
+});
+
+ipcMain.handle("comfy:complete-path", async (_event: IpcMainInvokeEvent, partialPath?: string) => {
+    if (!partialPath) return null;
+    const resolved = path.resolve(partialPath);
+    try {
+        const stats = await fs.stat(resolved);
+        if (stats.isDirectory()) {
+            return resolved;
+        }
+    } catch {
+        // ignore missing path
+    }
+    const parentDir = path.dirname(resolved);
+    const prefix = path.basename(resolved).toLowerCase();
+    if (!prefix) return null;
+    try {
+        const entries = await fs.readdir(parentDir, { withFileTypes: true });
+        const match = entries.find((entry) =>
+            entry.isDirectory() && entry.name.toLowerCase().startsWith(prefix)
+        );
+        if (match) {
+            return path.join(parentDir, match.name);
+        }
+    } catch {
+        // ignore
+    }
+    return null;
+});
+
+ipcMain.handle("comfy:complete-path-list", async (_event: IpcMainInvokeEvent, partialPath?: string) => {
+    if (!partialPath) return [];
+    const trimmed = partialPath.trim();
+    if (!trimmed) return [];
+    const hasTrailingSeparator = trimmed.endsWith("/") || trimmed.endsWith("\\");
+    const resolved = path.resolve(partialPath);
+    const parentDir = hasTrailingSeparator ? resolved : path.dirname(resolved);
+    const prefix = hasTrailingSeparator ? "" : path.basename(resolved).toLowerCase();
+    try {
+        const matches: string[] = [];
+        const dir = await fs.opendir(parentDir);
+        for await (const entry of dir) {
+            if (!entry.isDirectory()) continue;
+            if (prefix && !entry.name.toLowerCase().startsWith(prefix)) continue;
+            matches.push(path.join(parentDir, entry.name));
+            if (matches.length >= 12) {
+                break;
+            }
+        }
+        return matches.sort((a, b) => a.localeCompare(b));
+    } catch {
+        return [];
+    }
+});
+
+ipcMain.handle("comfy:collect-garbage", async () => {
+    if (typeof global.gc === "function") {
+        global.gc();
+        return true;
+    }
+    return false;
 });
 
 ipcMain.handle(

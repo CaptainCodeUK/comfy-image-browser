@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent, SyntheticEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent, SyntheticEvent } from "react";
 import {
   addCollectionRecord,
   addCollectionWithImages,
@@ -38,6 +38,8 @@ const THUMBNAIL_BATCH_SIZE = 6;
 const THUMBNAIL_RETRY_MS = 1200;
 const FILE_URL_BATCH_SIZE = 30;
 const REMOVAL_BATCH_SIZE = 50;
+const MOVE_UPDATE_BATCH_SIZE = 100;
+const MOVE_YIELD_INTERVAL = 12;
 const FAVORITES_ID = "favorites";
 const THUMBNAIL_CACHE_LIMIT = 2000;
 
@@ -232,6 +234,8 @@ const extractMetadataSummary = (metadata: Record<string, string> | null) => {
 };
 
 const CollectionTab: Tab = { id: "collection", title: "Collection", type: "collection" };
+const PREF_INCLUDE_SUBCOLLECTIONS = "includeSubCollections";
+const PREF_COLLAPSED_COLLECTION_IDS = "collapsedCollectionIds";
 
 export default function App() {
   const [collections, setCollections] = useState<Collection[]>([]);
@@ -243,6 +247,7 @@ export default function App() {
   const [iconSize, setIconSize] = useState(DEFAULT_ICON_SIZE);
   const [activeCollection, setActiveCollection] = useState<string | "all">("all");
   const [includeSubCollections, setIncludeSubCollections] = useState(true);
+  const [collapsedCollectionIds, setCollapsedCollectionIds] = useState<Set<string>>(() => new Set());
   const [isIndexing, setIsIndexing] = useState(false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [zoomByTab, setZoomByTab] = useState<Record<string, { mode: ZoomMode; level: number }>>({});
@@ -299,6 +304,17 @@ export default function App() {
   const [moveDestination, setMoveDestination] = useState("");
   const [moving, setMoving] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
+  const [moveProgress, setMoveProgress] = useState<{ processed: number; total: number } | null>(null);
+  const moveCancelRef = useRef({ cancelled: false });
+  const destinationInputRef = useRef("");
+  const suggestionRequestIdRef = useRef(0);
+  const suggestionFetchTimerRef = useRef<number | null>(null);
+  const closeDestinationSuggestions = useCallback(() => {
+    setDestinationSuggestions([]);
+    setDestinationSuggestionIndex(-1);
+  }, []);
+  const [destinationSuggestions, setDestinationSuggestions] = useState<string[]>([]);
+  const [destinationSuggestionIndex, setDestinationSuggestionIndex] = useState(-1);
   const handleBulkRenameBaseChange = useCallback((value: string) => {
     setBulkRenameBase(value);
   }, []);
@@ -405,6 +421,12 @@ export default function App() {
     if (index <= 0) return "";
     return name.slice(index);
   };
+
+  const triggerCollectGarbage = useCallback(() => {
+    if (window.comfy?.collectGarbage) {
+      void window.comfy.collectGarbage();
+    }
+  }, []);
   const deriveBulkRenameBase = (image?: IndexedImage) => {
     if (!image) return "image-";
     const extension = getFileExtension(image.fileName);
@@ -737,6 +759,20 @@ export default function App() {
     }, 200);
     return () => window.clearTimeout(timeout);
   }, [imageSort]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void setAppPref(PREF_INCLUDE_SUBCOLLECTIONS, includeSubCollections);
+    }, 200);
+    return () => window.clearTimeout(timeout);
+  }, [includeSubCollections]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void setAppPref(PREF_COLLAPSED_COLLECTION_IDS, Array.from(collapsedCollectionIds));
+    }, 200);
+    return () => window.clearTimeout(timeout);
+  }, [collapsedCollectionIds]);
 
   const collectionById = useMemo(() => {
     return new Map(collections.map((collection) => [collection.id, collection]));
@@ -1271,6 +1307,8 @@ export default function App() {
         storedCollection,
         storedCollectionSort,
         storedImageSort,
+        storedIncludeSubCollections,
+        storedCollapsedCollectionIds,
       ] = await Promise.all([
         getCollections(),
         getImages(),
@@ -1279,6 +1317,8 @@ export default function App() {
         getAppPref<string>("activeCollection"),
         getAppPref<CollectionSort>("collectionSort"),
         getAppPref<ImageSort>("imageSort"),
+        getAppPref<boolean>(PREF_INCLUDE_SUBCOLLECTIONS),
+        getAppPref<string[]>(PREF_COLLAPSED_COLLECTION_IDS),
       ]);
       const baseImages = imageRows.map((image: IndexedImage) => ({ ...image, fileUrl: image.filePath }));
       const fallbackActiveCollection = storedCollection;
@@ -1309,6 +1349,12 @@ export default function App() {
       }
       if (storedImageSort) {
         setImageSort(storedImageSort);
+      }
+      if (storedIncludeSubCollections !== undefined) {
+        setIncludeSubCollections(storedIncludeSubCollections);
+      }
+      if (Array.isArray(storedCollapsedCollectionIds)) {
+        setCollapsedCollectionIds(new Set(storedCollapsedCollectionIds));
       }
     };
     load();
@@ -1900,13 +1946,19 @@ export default function App() {
 
   function handleCloseTab(tabId: string) {
     if (tabId === "collection") return;
+    let closedImageTab = false;
     setTabs((prev) => {
       const index = prev.findIndex((tab) => tab.id === tabId);
+      if (index === -1) {
+        return prev;
+      }
+      const targetTab = prev[index];
+      closedImageTab = targetTab.type === "image";
       const nextTabs = prev.filter((tab) => tab.id !== tabId);
 
       setActiveTab((current) => {
         if (current.id !== tabId) return current;
-  if (nextTabs.length === 0) return CollectionTab;
+        if (nextTabs.length === 0) return CollectionTab;
         const leftIndex = Math.max(0, index - 1);
         const fallbackIndex = Math.min(leftIndex, nextTabs.length - 1);
         return nextTabs[fallbackIndex];
@@ -1914,19 +1966,35 @@ export default function App() {
 
       return nextTabs;
     });
+    if (closedImageTab) {
+      triggerCollectGarbage();
+    }
   }
 
   function handleCloseAllTabs() {
-  setTabs([CollectionTab]);
-  setActiveTab(CollectionTab);
+    let closedImageTabs = false;
+    setTabs((prev) => {
+      closedImageTabs = prev.some((tab) => tab.type === "image");
+      return [CollectionTab];
+    });
+    setActiveTab(CollectionTab);
+    if (closedImageTabs) {
+      triggerCollectGarbage();
+    }
   }
 
   function handleCloseOtherTabs(tabId: string) {
+    let removedImageTabs = false;
     setTabs((prev) => {
       const keep = prev.filter((tab) => tab.id === "collection" || tab.id === tabId);
+      const keepIds = new Set(keep.map((tab) => tab.id));
+      removedImageTabs = prev.some((tab) => tab.type === "image" && !keepIds.has(tab.id));
       return keep.length ? keep : [CollectionTab];
     });
     setActiveTab((current) => (current.id === tabId ? current : CollectionTab));
+    if (removedImageTabs) {
+      triggerCollectGarbage();
+    }
   }
 
   function handleCycleTab(direction: number) {
@@ -2389,41 +2457,172 @@ export default function App() {
     }
   }, [bulkRenameOpen, selectedOrderedImages.length]);
 
+  const handleDestinationInputChange = useCallback(
+    (value: string) => {
+      closeDestinationSuggestions();
+      destinationInputRef.current = value;
+      setMoveDestination(value);
+    },
+    [closeDestinationSuggestions]
+  );
+
+  const handleApplyDestinationSuggestion = useCallback(
+    (value: string) => {
+      handleDestinationInputChange(value);
+      closeDestinationSuggestions();
+    },
+    [closeDestinationSuggestions, handleDestinationInputChange]
+  );
+
+  const handleDestinationSuggestionNavigation = useCallback(
+    (direction: "next" | "prev") => {
+      setDestinationSuggestionIndex((prev) => {
+        const length = destinationSuggestions.length;
+        if (length === 0) return -1;
+        if (prev < 0 || prev >= length) {
+          return direction === "next" ? 0 : length - 1;
+        }
+        if (direction === "next") {
+          return prev === length - 1 ? 0 : prev + 1;
+        }
+        return prev === 0 ? length - 1 : prev - 1;
+      });
+    },
+    [destinationSuggestions.length]
+  );
+
+  const handleDestinationInputKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (destinationSuggestions.length === 0) return;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        event.stopPropagation();
+        handleDestinationSuggestionNavigation("next");
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        event.stopPropagation();
+        handleDestinationSuggestionNavigation("prev");
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeDestinationSuggestions();
+      }
+    },
+    [destinationSuggestions.length, handleDestinationSuggestionNavigation, closeDestinationSuggestions]
+  );
+
   const handleOpenMove = useCallback(() => {
     if (selectedOrderedImages.length === 0) return;
     setMoveError(null);
-    setMoveDestination(getParentPath(selectedOrderedImages[0].filePath));
+    handleDestinationInputChange(getParentPath(selectedOrderedImages[0].filePath));
     setMoveOpen(true);
-  }, [selectedOrderedImages]);
+  }, [selectedOrderedImages, handleDestinationInputChange]);
 
   const handlePickMoveDestination = useCallback(async () => {
     if (!bridgeAvailable || !window.comfy?.selectFolders) return;
     try {
-      const choices = await window.comfy.selectFolders();
+      const defaultPath = moveDestination.trim() || undefined;
+      const choices = await window.comfy.selectFolders(defaultPath);
       if (choices.length > 0) {
-        setMoveDestination(choices[0]);
+        handleDestinationInputChange(choices[0]);
       }
     } catch {
       // ignore user cancellation or errors
     }
-  }, [bridgeAvailable]);
+  }, [bridgeAvailable, moveDestination, handleDestinationInputChange]);
+
+  useEffect(() => {
+    if (!moveOpen) {
+      closeDestinationSuggestions();
+      return;
+    }
+    if (!bridgeAvailable || !window.comfy?.completePathList) {
+      closeDestinationSuggestions();
+      return;
+    }
+    const currentInput = destinationInputRef.current;
+    if (!currentInput || !currentInput.trim()) {
+      closeDestinationSuggestions();
+      return;
+    }
+    if (suggestionFetchTimerRef.current) {
+      window.clearTimeout(suggestionFetchTimerRef.current);
+      suggestionFetchTimerRef.current = null;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const requestId = suggestionRequestIdRef.current + 1;
+      suggestionRequestIdRef.current = requestId;
+      const fetchSuggestions = async () => {
+        try {
+          const suggestions = await window.comfy!.completePathList(currentInput);
+          if (cancelled) return;
+          if (suggestionRequestIdRef.current !== requestId) return;
+          if (destinationInputRef.current !== currentInput) return;
+          const normalizedInput = currentInput.trim().toLowerCase();
+          const hasExactMatch = normalizedInput.length > 0 &&
+            suggestions.some((suggestion) => suggestion.toLowerCase() === normalizedInput);
+          if (hasExactMatch) {
+            closeDestinationSuggestions();
+            return;
+          }
+          const filtered = suggestions.filter((suggestion) =>
+            suggestion.toLowerCase().startsWith(currentInput.toLowerCase())
+          );
+          setDestinationSuggestions(filtered);
+          setDestinationSuggestionIndex(filtered.length > 0 ? 0 : -1);
+        } catch {
+          // ignore
+        }
+      };
+      void fetchSuggestions();
+    }, 120);
+    suggestionFetchTimerRef.current = timer;
+    return () => {
+      cancelled = true;
+      if (suggestionFetchTimerRef.current) {
+        window.clearTimeout(suggestionFetchTimerRef.current);
+        suggestionFetchTimerRef.current = null;
+      }
+    };
+  }, [bridgeAvailable, moveDestination, moveOpen, closeDestinationSuggestions]);
 
   const handleMoveCancel = useCallback(() => {
+    moveCancelRef.current.cancelled = true;
     setMoveOpen(false);
     setMoveError(null);
-  }, []);
+    closeDestinationSuggestions();
+  }, [closeDestinationSuggestions]);
+
+  useEffect(() => {
+    if (!moveOpen) {
+      closeDestinationSuggestions();
+    }
+  }, [moveOpen, closeDestinationSuggestions]);
 
   const handleMove = useCallback(async () => {
     if (!window.comfy?.renamePath || !window.comfy?.findMissingFiles) {
       setMoveError("Bridge unavailable");
       return;
     }
+    closeDestinationSuggestions();
     if (selectedOrderedImages.length === 0) return;
     const destination = moveDestination.trim();
     if (!destination) {
       setMoveError("Enter a destination path");
       return;
     }
+    moveCancelRef.current.cancelled = false;
+    const cancelSignal = moveCancelRef.current;
+    const markMoveCanceled = () => {
+      const message = "Move canceled";
+      setToastMessage(message);
+      setLastCopied(message);
+    };
     const shouldMove = selectedOrderedImages.some(
       (image) => joinPath(destination, image.fileName) !== image.filePath
     );
@@ -2431,14 +2630,14 @@ export default function App() {
       setMoveError("Destination is the same as the current folder");
       return;
     }
-    const movePlans = selectedOrderedImages.map((image) => ({
-      image,
-      targetPath: joinPath(destination, image.fileName),
-    }));
-    const targetPaths = movePlans.map((plan) => plan.targetPath);
+    const targetPaths = selectedOrderedImages.map((image) => joinPath(destination, image.fileName));
     let conflictingPaths: string[] = [];
     try {
       const missingPaths = await window.comfy.findMissingFiles(targetPaths);
+      if (cancelSignal.cancelled) {
+        markMoveCanceled();
+        return;
+      }
       const missingSet = new Set(missingPaths);
       conflictingPaths = targetPaths.filter((path) => !missingSet.has(path));
     } catch (error) {
@@ -2475,15 +2674,19 @@ export default function App() {
       }
     }
     const conflictSet = new Set(conflictingPaths);
-    const executablePlans = movePlans.filter(
-      (plan) => !(skipConflicts && conflictSet.has(plan.targetPath))
-    );
+    const executableIndexes = selectedOrderedImages
+      .map((_, index) => index)
+      .filter((index) => !(skipConflicts && conflictSet.has(targetPaths[index])));
     setMoving(true);
     setMoveError(null);
     try {
       if (window.comfy?.ensureDirectory) {
         try {
           await window.comfy.ensureDirectory(destination);
+          if (cancelSignal.cancelled) {
+            markMoveCanceled();
+            return;
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : "Failed to prepare destination";
           setMoveError(message);
@@ -2492,10 +2695,27 @@ export default function App() {
           return;
         }
       }
-      const moveResults: Array<{ id: string; fileName: string; filePath: string }> = [];
-      for (const { image, targetPath } of executablePlans) {
+      if (executableIndexes.length > 0) {
+        setMoveProgress({ processed: 0, total: executableIndexes.length });
+      } else {
+        setMoveProgress(null);
+      }
+      const movedIndexes: number[] = [];
+      for (let planIndex = 0; planIndex < executableIndexes.length; planIndex += 1) {
+        if (planIndex > 0 && planIndex % MOVE_YIELD_INTERVAL === 0) {
+          await yieldToPaint();
+        }
+        const imageIndex = executableIndexes[planIndex];
+        const image = selectedOrderedImages[imageIndex];
+        const targetPath = targetPaths[imageIndex];
+        if (cancelSignal.cancelled) {
+          break;
+        }
         if (targetPath === image.filePath) {
-          moveResults.push({ id: image.id, fileName: image.fileName, filePath: image.filePath });
+          movedIndexes.push(imageIndex);
+          setMoveProgress((prev) =>
+            prev ? { ...prev, processed: prev.processed + 1 } : prev
+          );
           continue;
         }
         const result = await window.comfy.renamePath({
@@ -2511,9 +2731,18 @@ export default function App() {
           setLastCopied(message);
           return;
         }
-        moveResults.push({ id: image.id, fileName: image.fileName, filePath: targetPath });
+        movedIndexes.push(imageIndex);
+        setMoveProgress((prev) =>
+          prev ? { ...prev, processed: prev.processed + 1 } : prev
+        );
       }
-      if (moveResults.length === 0) {
+      executableIndexes.length = 0;
+      const canceledDuringMove = cancelSignal.cancelled;
+      if (canceledDuringMove && movedIndexes.length === 0) {
+        markMoveCanceled();
+        return;
+      }
+      if (movedIndexes.length === 0) {
         setToastMessage("No files were moved");
         setLastCopied("No files were moved");
         return;
@@ -2525,85 +2754,107 @@ export default function App() {
         setCollections((prev) => [...prev, created]);
       }
       const targetCollectionId = finalCollection.id;
-      const moveMap = new Map(
-        moveResults.map((entry) => [entry.id, { ...entry, collectionId: targetCollectionId }])
-      );
-      await Promise.all(
-        moveResults.map((entry) => updateImageFileInfo(entry.id, entry.filePath, entry.fileName, targetCollectionId))
-      );
-      setImages((prev) =>
-        prev.map((image) => {
-          const update = moveMap.get(image.id);
-          if (!update) return image;
+      const applyMoveBatch = async (batchIndexes: number[]) => {
+        if (batchIndexes.length === 0) return;
+        const updates = batchIndexes.map((index) => {
+          const image = selectedOrderedImages[index];
           return {
-            ...image,
-            filePath: update.filePath,
-            fileUrl: update.filePath,
-            collectionId: update.collectionId,
+            id: image.id,
+            fileName: image.fileName,
+            filePath: targetPaths[index],
+            collectionId: targetCollectionId,
           };
-        })
-      );
-      setTabs((prev) =>
-        prev.map((tab) => {
-          if (tab.type !== "image") return tab;
-          const update = moveMap.get(tab.image.id);
-          if (!update) return tab;
+        });
+        await Promise.all(
+          updates.map((entry) =>
+            updateImageFileInfo(entry.id, entry.filePath, entry.fileName, targetCollectionId)
+          )
+        );
+        const updateMap = new Map(updates.map((entry) => [entry.id, entry]));
+        setImages((prev) =>
+          prev.map((image) => {
+            const update = updateMap.get(image.id);
+            if (!update) return image;
+            return {
+              ...image,
+              filePath: update.filePath,
+              fileUrl: update.filePath,
+              collectionId: update.collectionId,
+            };
+          })
+        );
+        setTabs((prev) =>
+          prev.map((tab) => {
+            if (tab.type !== "image") return tab;
+            const update = updateMap.get(tab.image.id);
+            if (!update) return tab;
+            return {
+              ...tab,
+              image: {
+                ...tab.image,
+                filePath: update.filePath,
+                fileUrl: update.filePath,
+                collectionId: update.collectionId,
+              },
+            };
+          })
+        );
+        setActiveTab((current) => {
+          if (current.type !== "image") return current;
+          const update = updateMap.get(current.image.id);
+          if (!update) return current;
           return {
-            ...tab,
+            ...current,
             image: {
-              ...tab.image,
+              ...current.image,
               filePath: update.filePath,
               fileUrl: update.filePath,
               collectionId: update.collectionId,
             },
           };
-        })
-      );
-      setActiveTab((current) => {
-        if (current.type !== "image") return current;
-        const update = moveMap.get(current.image.id);
-        if (!update) return current;
-        return {
-          ...current,
-          image: {
-            ...current.image,
-            filePath: update.filePath,
-            fileUrl: update.filePath,
-            collectionId: update.collectionId,
-          },
-        };
-      });
-      const movedIds = moveResults.map((entry) => entry.id);
-      removeThumbnailEntries(movedIds);
-      const hydrated = moveResults
-        .map((entry) => {
-          const original = imageById.get(entry.id);
-          if (!original) return null;
-          return {
-            ...original,
+        });
+        for (let index = 0; index < updates.length; index += FILE_URL_BATCH_SIZE) {
+          const chunk = updates.slice(index, index + FILE_URL_BATCH_SIZE).map((entry) => ({
+            id: entry.id,
+            collectionId: entry.collectionId,
             filePath: entry.filePath,
+            fileName: entry.fileName,
             fileUrl: entry.filePath,
-            collectionId: targetCollectionId,
-          };
-        })
-        .filter((entry): entry is IndexedImage => Boolean(entry));
-      hydrateFileUrls(hydrated);
-      const skippedCount = skipConflicts ? conflictingPaths.length : 0;
-      let successMessage = `Moved ${movedIds.length} file${movedIds.length === 1 ? "" : "s"} to ${destination}`;
+            sizeBytes: 0,
+            createdAt: "",
+            metadataText: null,
+          } as IndexedImage));
+          hydrateFileUrls(chunk);
+        }
+        removeThumbnailEntries(updates.map((entry) => entry.id));
+      };
+      for (let index = 0; index < movedIndexes.length; index += MOVE_UPDATE_BATCH_SIZE) {
+        const batchIndexes = movedIndexes.slice(index, index + MOVE_UPDATE_BATCH_SIZE);
+        await applyMoveBatch(batchIndexes);
+      }
+  const skippedCount = skipConflicts ? conflictingPaths.length : 0;
+  const movedCount = movedIndexes.length;
+  let successMessage = `Moved ${movedCount} file${movedCount === 1 ? "" : "s"} to ${destination}`;
       if (skippedCount > 0) {
         successMessage += ` (${skippedCount} file${skippedCount === 1 ? "" : "s"} already existed and were skipped)`;
+      }
+      if (canceledDuringMove) {
+        successMessage += " (canceled)";
       }
       setToastMessage(successMessage);
       setLastCopied(successMessage);
       setMoveOpen(false);
     } finally {
       setMoving(false);
+      setMoveProgress(null);
+      if (window.comfy?.collectGarbage) {
+        void window.comfy.collectGarbage();
+      }
     }
   }, [
     buildConflictPreview,
     collections,
     hydrateFileUrls,
-    imageById,
     moveDestination,
     removeThumbnailEntries,
     selectedOrderedImages,
@@ -2614,6 +2865,7 @@ export default function App() {
     setSelectedCollectionIds,
     setCollectionFocusedId,
     setCollectionSelectionAnchor,
+    bridgeAvailable,
   ]);
 
   useEffect(() => {
@@ -3214,8 +3466,6 @@ export default function App() {
     return activeTab.image;
   }, [activeTab]);
 
-  const activeImageId = activeTab.type === "image" ? activeTab.image.id : null;
-
   useEffect(() => {
     if (activeTab.type !== "image") {
       setIsImageLoading(false);
@@ -3295,36 +3545,28 @@ export default function App() {
   }, [activeZoom.mode, activeZoom.level]);
 
   useEffect(() => {
-    if (activeTab.type !== "image") {
+    if (!activeTabContent) {
       setMetadataSummary(null);
       return;
     }
-    const cached = metadataCacheRef.current.get(activeTab.image.id);
+    const cached = metadataCacheRef.current.get(activeTabContent.id);
     if (cached) {
       setMetadataSummary(cached);
       return;
     }
     setMetadataSummary(null);
     let cancelled = false;
-    const compute = () => {
+    const timeout = globalThis.setTimeout(() => {
       if (cancelled) return;
-      const summary = extractMetadataSummary(activeTab.image.metadataText);
-      metadataCacheRef.current.set(activeTab.image.id, summary);
+      const summary = extractMetadataSummary(activeTabContent.metadataText);
+      metadataCacheRef.current.set(activeTabContent.id, summary);
       setMetadataSummary(summary);
-    };
-    if ("requestIdleCallback" in window) {
-      const id = (window as Window & { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(compute);
-      return () => {
-        cancelled = true;
-        (window as Window & { cancelIdleCallback: (cb: number) => void }).cancelIdleCallback(id);
-      };
-    }
-    const timeout = globalThis.setTimeout(compute, 0);
+    }, 0);
     return () => {
       cancelled = true;
       globalThis.clearTimeout(timeout);
     };
-  }, [activeTab.type, activeImageId]);
+  }, [activeTabContent]);
 
   useEffect(() => {
     const node = tabRefs.current[activeTab.id];
@@ -3570,10 +3812,16 @@ export default function App() {
         error={moveError}
         previewEntries={movePreviewEntries}
         additionalCount={movePreviewAdditionalCount}
-        onDestinationChange={setMoveDestination}
+        onDestinationChange={handleDestinationInputChange}
         onCancel={handleMoveCancel}
         onMove={handleMove}
         onPickDestination={handlePickMoveDestination}
+        moveProgress={moveProgress}
+        destinationSuggestions={destinationSuggestions}
+        destinationSuggestionIndex={destinationSuggestionIndex}
+        onApplyDestinationSuggestion={handleApplyDestinationSuggestion}
+        onCloseDestinationSuggestions={closeDestinationSuggestions}
+        onDestinationInputKeyDown={handleDestinationInputKeyDown}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -3594,6 +3842,8 @@ export default function App() {
           setActiveCollection={setActiveCollection}
           includeSubCollections={includeSubCollections}
           setIncludeSubCollections={setIncludeSubCollections}
+          collapsedCollectionIds={collapsedCollectionIds}
+          setCollapsedCollectionIds={setCollapsedCollectionIds}
           renameState={renameState}
           renameInputRef={renameInputRef}
           renameCancelRef={renameCancelRef}

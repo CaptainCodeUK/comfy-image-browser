@@ -19,6 +19,12 @@ type MoveFilesModalProps = {
   onCancel: () => void;
   onMove: () => void;
   onPickDestination: () => void;
+  moveProgress?: { processed: number; total: number } | null;
+  destinationSuggestions: string[];
+  destinationSuggestionIndex: number;
+  onApplyDestinationSuggestion: (value: string) => void;
+  onCloseDestinationSuggestions: () => void;
+  onDestinationInputKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
 };
 
 export function MoveFilesModal({
@@ -34,11 +40,23 @@ export function MoveFilesModal({
   onCancel,
   onMove,
   onPickDestination,
+  moveProgress,
+  destinationSuggestions,
+  destinationSuggestionIndex,
+  onApplyDestinationSuggestion,
+  onCloseDestinationSuggestions,
+  onDestinationInputKeyDown,
 }: MoveFilesModalProps) {
   const destinationId = useId();
   const helperId = `${destinationId}-helper`;
+  const suggestionListId = `${destinationId}-suggestions`;
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const destinationRef = useRef<HTMLInputElement | null>(null);
+  const focusDestinationInput = useCallback(() => {
+    if (!destinationRef.current) return;
+    destinationRef.current.focus();
+    destinationRef.current.select();
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -75,17 +93,39 @@ export function MoveFilesModal({
         ) {
           return;
         }
+        if (destinationSuggestions.length > 0 && destinationSuggestionIndex >= 0) {
+          event.preventDefault();
+          onApplyDestinationSuggestion(destinationSuggestions[destinationSuggestionIndex]);
+          focusDestinationInput();
+          return;
+        }
         if (!disabled && !moving) {
           event.preventDefault();
           onMove();
         }
       }
       if (event.key === "Escape") {
+        if (destinationSuggestions.length > 0) {
+          event.preventDefault();
+          onCloseDestinationSuggestions();
+          return;
+        }
         event.preventDefault();
         onCancel();
       }
     },
-    [open, disabled, moving, onMove, onCancel]
+    [
+      open,
+      disabled,
+      moving,
+      onMove,
+      onCancel,
+      destinationSuggestions,
+      destinationSuggestionIndex,
+      onApplyDestinationSuggestion,
+      onCloseDestinationSuggestions,
+      focusDestinationInput,
+    ]
   );
 
   if (!open) return null;
@@ -96,7 +136,7 @@ export function MoveFilesModal({
         ref={dialogRef}
         onKeyDown={handleKeyDown}
         tabIndex={-1}
-        className="pointer-events-auto w-full max-w-md rounded-2xl border border-slate-800 bg-slate-950/90 p-6 text-sm text-slate-100 shadow-xl"
+        className="pointer-events-auto w-full max-w-[36rem] rounded-2xl border border-slate-800 bg-slate-950/90 p-6 text-sm text-slate-100 shadow-xl"
       >
         <div className="flex items-center justify-between">
           <div className="text-base font-semibold">Move {fileCount} file(s)</div>
@@ -114,17 +154,52 @@ export function MoveFilesModal({
           <label htmlFor={destinationId} className="block text-[11px] uppercase tracking-wide text-slate-400">
             Destination folder
           </label>
-          <div className="flex items-center gap-2">
-            <input
-              id={destinationId}
-              ref={destinationRef}
-              value={destination}
-              onChange={(event) => onDestinationChange(event.target.value)}
-              onFocus={(event) => event.currentTarget.select()}
-              placeholder="Enter destination folder path"
-              className="flex-1 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-              aria-describedby={helperId}
-            />
+          <div className="flex items-start gap-2">
+            <div className="relative flex-1">
+              <input
+                id={destinationId}
+                ref={destinationRef}
+                value={destination}
+                onChange={(event) => onDestinationChange(event.target.value)}
+                onFocus={(event) => event.currentTarget.select()}
+                onKeyDown={onDestinationInputKeyDown}
+                placeholder="Enter destination folder path"
+                className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                aria-describedby={helperId}
+                aria-controls={destinationSuggestions.length > 0 ? suggestionListId : undefined}
+              />
+              {destinationSuggestions.length > 0 ? (
+                <ul
+                  id={suggestionListId}
+                  role="listbox"
+                  aria-live="polite"
+                  aria-label="Destination suggestions"
+                  className="absolute left-0 right-0 z-10 mt-1 max-h-48 overflow-y-auto rounded-lg border border-slate-700 bg-slate-950/90 text-left text-[11px] text-slate-200 shadow-xl"
+                >
+                  {destinationSuggestions.map((suggestion, index) => {
+                    const isActive = index === destinationSuggestionIndex;
+                    return (
+                      <li
+                        key={suggestion}
+                        role="option"
+                        className={`cursor-pointer px-3 py-2 ${
+                          isActive ? "bg-slate-900/80" : "bg-transparent"
+                        } hover:bg-slate-900/60`}
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          onApplyDestinationSuggestion(suggestion);
+                          focusDestinationInput();
+                        }}
+                      >
+                        <span className="block truncate" title={suggestion}>
+                          {suggestion}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+            </div>
             <button
               type="button"
               onClick={onPickDestination}
@@ -158,6 +233,21 @@ export function MoveFilesModal({
             </div>
           </div>
         </div>
+        {moveProgress ? (
+          <div className="mt-4 space-y-1">
+            <div className="flex items-center justify-between text-[11px] text-slate-400">
+              <span>Moving files</span>
+              <span className="font-semibold text-slate-100">
+                {moveProgress.processed}/{moveProgress.total}
+              </span>
+            </div>
+            <progress
+              className="h-2 w-full appearance-none rounded-full bg-slate-800"
+              max={moveProgress.total}
+              value={moveProgress.processed}
+            />
+          </div>
+        ) : null}
         <div className="mt-6 flex justify-end gap-2">
           <button
             type="button"

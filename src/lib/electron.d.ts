@@ -3,7 +3,9 @@ import type { IndexedImagePayload } from "./types";
 declare global {
   interface Window {
     comfy: {
-      selectFolders: () => Promise<string[]>;
+  selectFolders: (defaultPath?: string) => Promise<string[]>;
+  completePath: (partialPath?: string) => Promise<string | null>;
+  completePathList: (partialPath?: string) => Promise<string[]>;
       indexFolders: (
         paths: string[],
         existingPaths?: string[],
@@ -63,6 +65,7 @@ declare global {
   getLatestRelease: () => Promise<{ version: string; url: string }>;
       openExternal: (url: string) => Promise<boolean>;
   toggleDevTools: () => Promise<boolean>;
+  collectGarbage: () => Promise<boolean>;
       updateMenuState: (state: {
         hasActiveImage: boolean;
         hasActiveCollection: boolean;

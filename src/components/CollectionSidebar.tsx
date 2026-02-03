@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent } from "react";
 import type { Collection } from "../lib/types";
 import type { CollectionNode, CollectionSort, ProgressState, RenameState } from "../lib/appTypes";
@@ -39,6 +39,8 @@ interface CollectionSidebarProps {
   cancelingIndex: boolean;
   includeSubCollections: boolean;
   setIncludeSubCollections: React.Dispatch<React.SetStateAction<boolean>>;
+  collapsedCollectionIds: Set<string>;
+  setCollapsedCollectionIds: React.Dispatch<React.SetStateAction<Set<string>>>;
 }
 
 const COLLECTION_NAV_KEYS = ["ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"];
@@ -78,12 +80,12 @@ export function CollectionSidebar({
   cancelingIndex,
   includeSubCollections,
   setIncludeSubCollections,
+  collapsedCollectionIds,
+  setCollapsedCollectionIds,
 }: CollectionSidebarProps) {
   const collectionListRef = useRef<HTMLDivElement | null>(null);
   const collectionRowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const depthClasses = ["pl-3", "pl-5", "pl-7", "pl-9", "pl-10", "pl-12", "pl-14"];
-  const [collapsedCollectionIds, setCollapsedCollectionIds] = useState<Set<string>>(() => new Set());
-
   const getCollectionRangeIds = useCallback(
     (start: number, end: number) => {
       if (collectionIds.length === 0) return new Set<string>();
@@ -281,7 +283,7 @@ export function CollectionSidebar({
       const next = new Set(Array.from(prev).filter((id) => validIds.has(id)));
       return next.size === prev.size ? prev : next;
     });
-  }, [collectionIds]);
+  }, [collectionIds, setCollapsedCollectionIds]);
 
   const toggleCollectionCollapse = useCallback((collectionId: string) => {
     setCollapsedCollectionIds((prev) => {
@@ -293,7 +295,22 @@ export function CollectionSidebar({
       }
       return next;
     });
-  }, []);
+  }, [setCollapsedCollectionIds]);
+
+  useLayoutEffect(() => {
+    if (!collectionHighlightId || collectionHighlightId === "all" || collectionHighlightId === favoritesId) {
+      return;
+    }
+    const node = collectionRowRefs.current[collectionHighlightId];
+    if (!node) return;
+    const container = collectionListRef.current;
+    if (!container) return;
+    const containerRect = container.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    if (nodeRect.top < containerRect.top || nodeRect.bottom > containerRect.bottom) {
+      node.scrollIntoView({ block: "nearest" });
+    }
+  }, [collectionHighlightId, favoritesId, collectionIds, collapsedCollectionIds]);
 
   const selectionCount = selectedCollectionIds.size;
 
@@ -333,7 +350,7 @@ export function CollectionSidebar({
                     toggleCollectionCollapse(collection.id);
                   }
                 }}
-                aria-expanded={!isCollapsed}
+                aria-expanded={!isCollapsed ? "true" : "false"}
                 aria-label={isCollapsed ? "Expand collection" : "Collapse collection"}
                 className="h-8 w-8 rounded-full border border-transparent text-xs text-slate-400 transition hover:border-slate-600"
               >

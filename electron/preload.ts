@@ -2,9 +2,12 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { IndexedImagePayload } from "../src/lib/types";
 
 contextBridge.exposeInMainWorld("comfy", {
-  selectFolders: () => ipcRenderer.invoke("comfy:select-folders"),
+  selectFolders: (defaultPath?: string) => ipcRenderer.invoke("comfy:select-folders", defaultPath ?? undefined),
+  completePath: (partialPath?: string) => ipcRenderer.invoke("comfy:complete-path", partialPath ?? undefined),
+  completePathList: (partialPath?: string) => ipcRenderer.invoke("comfy:complete-path-list", partialPath ?? undefined),
   indexFolders: (paths: string[], existingPaths?: string[], options?: { returnPayload?: boolean }) =>
     ipcRenderer.invoke("comfy:index-folders", paths, existingPaths ?? [], options ?? {}),
+  collectGarbage: () => ipcRenderer.invoke("comfy:collect-garbage"),
   cancelIndexing: () => ipcRenderer.invoke("comfy:cancel-indexing"),
   toFileUrl: (filePath: string) => ipcRenderer.invoke("comfy:to-file-url", filePath),
   getThumbnail: (filePath: string) => ipcRenderer.invoke("comfy:get-thumbnail", filePath),
