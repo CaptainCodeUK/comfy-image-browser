@@ -856,25 +856,24 @@ export default function App() {
       children: [],
       normalizedRoot: normalizeForComparison(collection.rootPath),
     }));
-    const roots: BuildNode[] = [];
+    const nodeByPath = new Map(buildNodes.map((node) => [node.normalizedRoot, node]));
+    const roots = new Set<BuildNode>(buildNodes);
     for (const node of buildNodes) {
-      let parent: BuildNode | null = null;
-      let bestLength = -1;
-      for (const candidate of buildNodes) {
-        if (candidate === node) continue;
-        if (isPathWithinRoot(node.collection.rootPath, candidate.collection.rootPath)) {
-          const length = candidate.normalizedRoot.length;
-          if (length > bestLength) {
-            parent = candidate;
-            bestLength = length;
-          }
+      let candidatePath = getParentPath(node.collection.rootPath);
+      while (candidatePath && candidatePath !== node.collection.rootPath) {
+        const normalizedCandidate = normalizeForComparison(candidatePath);
+        const parent = nodeByPath.get(normalizedCandidate);
+        if (parent && parent !== node) {
+          node.depth = parent.depth + 1;
+          parent.children.push(node);
+          roots.delete(node);
+          break;
         }
-      }
-      if (parent) {
-        node.depth = parent.depth + 1;
-        parent.children.push(node);
-      } else {
-        roots.push(node);
+        const nextParent = getParentPath(candidatePath);
+        if (nextParent === candidatePath) {
+          break;
+        }
+        candidatePath = nextParent;
       }
     }
     const mapNode = (buildNode: BuildNode): CollectionNode => ({
@@ -882,7 +881,7 @@ export default function App() {
       depth: buildNode.depth,
       children: buildNode.children.map(mapNode),
     });
-    return roots.map(mapNode);
+    return Array.from(roots).map(mapNode);
   }, [sortedCollections]);
 
   const flattenedCollections = useMemo(() => {
